@@ -47,6 +47,8 @@ const (
 	compactThresholdRatio = 0.70
 )
 
+const forcedReadContinuationPrompt = "Continue by calling the read tool on one representative source file before finalizing your answer."
+
 // NewAgent creates a new Agent with the given configuration.
 // If maxSteps <= 0, defaults to 10.
 func NewAgent(registry *tools.Registry, memory Memory, maxSteps int, dispatch DispatchFn) *Agent {
@@ -115,6 +117,11 @@ func (a *Agent) Run(ctx context.Context, sessionID string, prompt string) (*RunR
 		if len(toolCalls) == 0 {
 			if response.StopReason == StopReasonToolUse {
 				return nil, errors.New("tool_use stop_reason received without tool_use content blocks")
+			}
+			if shouldRecoverFromMissedForcedRead(a.memory.Messages(), prompt) && step+1 < a.maxSteps {
+				log.Warn().Int("step", step).Msg("agent: expected follow-up read tool call; injecting continuation turn")
+				a.memory.Append(toUserContinuationMessage(forcedReadContinuationPrompt))
+				continue
 			}
 			log.Debug().Int("step", step).Msg("agent: no tool calls, finishing")
 			finalOutput = extractTextContent(response.Content)
@@ -240,6 +247,11 @@ func (a *Agent) Stream(ctx context.Context, sessionID string, prompt string) (<-
 				if response.StopReason == StopReasonToolUse {
 					events <- Event{Type: EventError, Content: "tool_use stop_reason received without tool_use content blocks"}
 					return
+				}
+				if shouldRecoverFromMissedForcedRead(a.memory.Messages(), prompt) && step+1 < a.maxSteps {
+					log.Warn().Int("step", step).Msg("agent: expected follow-up read tool call; injecting continuation turn")
+					a.memory.Append(toUserContinuationMessage(forcedReadContinuationPrompt))
+					continue
 				}
 				log.Debug().Int("step", step).Msg("agent: no tool calls, finishing")
 				clearCheckpoint(sessionID)
@@ -474,6 +486,39 @@ func shouldForceSingleReadFollowup(messages []Message) bool {
 		}
 	}
 	return readToolResultsSeen == 0
+}
+
+func shouldRecoverFromMissedForcedRead(messages []Message, prompt string) bool {
+	if !shouldRequireInitialToolUse(prompt) {
+		return false
+	}
+	if !hasToolResultByName(messages, "glob") || hasToolResultByName(messages, "read") {
+		return false
+	}
+	if shouldForceSingleReadFollowup(messages) {
+		return true
+	}
+	if len(messages) == 0 {
+		return false
+	}
+	if messages[len(messages)-1].Role != "assistant" {
+		return false
+	}
+	return shouldForceSingleReadFollowup(messages[:len(messages)-1])
+}
+
+func hasToolResultByName(messages []Message, toolName string) bool {
+	for _, msg := range messages {
+		if msg.Role != "user" {
+			continue
+		}
+		for _, part := range msg.Content {
+			if part.Type == "tool_result" && strings.EqualFold(part.Name, toolName) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func shouldForceReadAfterToolResults(messages []Message) bool {

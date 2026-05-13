@@ -605,6 +605,154 @@ func TestStreamEmitsTurnProgress(t *testing.T) {
 	}
 }
 
+func TestRunInjectsContinuationWhenForcedReadFollowupIsMissed(t *testing.T) {
+	call := 0
+	var sawForcedRead bool
+	var sawContinuationPrompt bool
+	registry := tools.NewRegistry()
+	registry.Register(tools.Bash())
+
+	ag := NewAgent(registry, NewBufferMemory(16), 6, func(ctx context.Context, req *MessagesRequest) (<-chan *MessagesResponse, error) {
+		call++
+		ch := make(chan *MessagesResponse, 1)
+
+		switch call {
+		case 1:
+			ch <- &MessagesResponse{Content: []ContentBlock{{Type: "tool_use", ID: "toolu_glob", Name: "glob", Input: map[string]any{"pattern": "*"}}}, StopReason: StopReasonToolUse}
+		case 2:
+			if toolChoice, ok := req.ToolChoice.(map[string]any); ok && toolChoice["functionName"] == "read" {
+				sawForcedRead = true
+			}
+			ch <- &MessagesResponse{Content: []ContentBlock{TextBlock("I can summarize now.")}, StopReason: StopReasonEndTurn}
+		default:
+			for _, msg := range req.Messages {
+				if msg.Role != "user" {
+					continue
+				}
+				for _, part := range msg.Content {
+					if part.Type == "text" && strings.Contains(part.Text, forcedReadContinuationPrompt) {
+						sawContinuationPrompt = true
+					}
+				}
+			}
+			ch <- &MessagesResponse{Content: []ContentBlock{TextBlock("final answer")}, StopReason: StopReasonEndTurn}
+		}
+
+		close(ch)
+		return ch, nil
+	})
+
+	result, err := ag.Run(context.Background(), "sess-forced-read-run", "explain codebase")
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !sawForcedRead {
+		t.Fatal("expected step 2 request to force read tool choice")
+	}
+	if !sawContinuationPrompt {
+		t.Fatal("expected continuation prompt to be appended after missed forced read followup")
+	}
+	if strings.TrimSpace(result.Output) != "final answer" {
+		t.Fatalf("result output = %q, want final answer", result.Output)
+	}
+	if call != 3 {
+		t.Fatalf("dispatch calls = %d, want 3", call)
+	}
+}
+
+func TestStreamInjectsContinuationWhenForcedReadFollowupIsMissed(t *testing.T) {
+	call := 0
+	var sawForcedRead bool
+	var sawContinuationPrompt bool
+	registry := tools.NewRegistry()
+	registry.Register(tools.Bash())
+
+	ag := NewAgent(registry, NewBufferMemory(16), 6, func(ctx context.Context, req *MessagesRequest) (<-chan *MessagesResponse, error) {
+		call++
+		ch := make(chan *MessagesResponse, 1)
+
+		switch call {
+		case 1:
+			ch <- &MessagesResponse{Content: []ContentBlock{{Type: "tool_use", ID: "toolu_glob", Name: "glob", Input: map[string]any{"pattern": "*"}}}, StopReason: StopReasonToolUse}
+		case 2:
+			if toolChoice, ok := req.ToolChoice.(map[string]any); ok && toolChoice["functionName"] == "read" {
+				sawForcedRead = true
+			}
+			ch <- &MessagesResponse{Content: []ContentBlock{TextBlock("I can summarize now.")}, StopReason: StopReasonEndTurn}
+		default:
+			for _, msg := range req.Messages {
+				if msg.Role != "user" {
+					continue
+				}
+				for _, part := range msg.Content {
+					if part.Type == "text" && strings.Contains(part.Text, forcedReadContinuationPrompt) {
+						sawContinuationPrompt = true
+					}
+				}
+			}
+			ch <- &MessagesResponse{Content: []ContentBlock{TextBlock("final answer")}, StopReason: StopReasonEndTurn}
+		}
+
+		close(ch)
+		return ch, nil
+	})
+
+	events, err := ag.Stream(context.Background(), "sess-forced-read-stream", "explain codebase")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+
+	var gotDone bool
+	for event := range events {
+		if event.Type == EventDone {
+			gotDone = true
+		}
+		if event.Type == EventError {
+			t.Fatalf("unexpected stream error event: %s", event.Content)
+		}
+	}
+
+	if !gotDone {
+		t.Fatal("expected done event")
+	}
+	if !sawForcedRead {
+		t.Fatal("expected step 2 request to force read tool choice")
+	}
+	if !sawContinuationPrompt {
+		t.Fatal("expected continuation prompt to be appended after missed forced read followup")
+	}
+	if call != 3 {
+		t.Fatalf("dispatch calls = %d, want 3", call)
+	}
+}
+
+func TestRunDoesNotInjectContinuationForNonGlobToolFlow(t *testing.T) {
+	call := 0
+	ag := NewAgent(tools.NewRegistry(), NewBufferMemory(16), 6, func(ctx context.Context, req *MessagesRequest) (<-chan *MessagesResponse, error) {
+		call++
+		ch := make(chan *MessagesResponse, 1)
+		switch call {
+		case 1:
+			ch <- &MessagesResponse{Content: []ContentBlock{{Type: "tool_use", ID: "toolu_time", Name: "get_current_time", Input: map[string]any{}}}, StopReason: StopReasonToolUse}
+		default:
+			ch <- &MessagesResponse{Content: []ContentBlock{TextBlock("ok")}, StopReason: StopReasonEndTurn}
+		}
+		close(ch)
+		return ch, nil
+	})
+
+	result, err := ag.Run(context.Background(), "sess-no-continuation", "what time is it?")
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if strings.TrimSpace(result.Output) != "ok" {
+		t.Fatalf("result output = %q, want ok", result.Output)
+	}
+	if call != 2 {
+		t.Fatalf("dispatch calls = %d, want 2", call)
+	}
+}
+
 func newTestAgent() *Agent {
 	registry := tools.NewRegistry()
 	registry.Register(tools.Bash())
