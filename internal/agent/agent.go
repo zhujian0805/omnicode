@@ -116,10 +116,6 @@ func (a *Agent) Run(ctx context.Context, sessionID string, prompt string) (*RunR
 			if response.StopReason == StopReasonToolUse {
 				return nil, errors.New("tool_use stop_reason received without tool_use content blocks")
 			}
-			if shouldContinueAfterToolIntentText(prompt, response.Content) {
-				a.memory.Append(toUserContinuationMessage("Use the read tool on a representative repository file now, then continue."))
-				continue
-			}
 			log.Debug().Int("step", step).Msg("agent: no tool calls, finishing")
 			finalOutput = extractTextContent(response.Content)
 			clearCheckpoint(sessionID)
@@ -244,10 +240,6 @@ func (a *Agent) Stream(ctx context.Context, sessionID string, prompt string) (<-
 				if response.StopReason == StopReasonToolUse {
 					events <- Event{Type: EventError, Content: "tool_use stop_reason received without tool_use content blocks"}
 					return
-				}
-				if shouldContinueAfterToolIntentText(prompt, response.Content) {
-					a.memory.Append(toUserContinuationMessage("Use the read tool on a representative repository file now, then continue."))
-					continue
 				}
 				log.Debug().Int("step", step).Msg("agent: no tool calls, finishing")
 				clearCheckpoint(sessionID)
@@ -415,7 +407,7 @@ func (a *Agent) buildRequest(step int, prompt string) *MessagesRequest {
 	if len(toolDefs) > 0 {
 		if step == 0 && shouldRequireInitialToolUse(prompt) {
 			req.ToolChoice = map[string]any{"type": "function", "functionName": "glob"}
-		} else if shouldForceReadContinuation(filtered) {
+		} else if shouldForceSingleReadFollowup(filtered) {
 			req.ToolChoice = map[string]any{"type": "function", "functionName": "read"}
 		} else {
 			req.ToolChoice = "auto"
@@ -451,46 +443,45 @@ func shouldRequireInitialToolUse(prompt string) bool {
 	return false
 }
 
-func shouldContinueAfterToolIntentText(prompt string, content []ContentBlock) bool {
-	if !shouldRequireInitialToolUse(prompt) {
-		return false
-	}
-	text := strings.ToLower(strings.TrimSpace(extractTextContent(content)))
-	if text == "" {
-		return false
-	}
-	intentPhrases := []string{
-		"let me explore",
-		"let me inspect",
-		"i'll inspect",
-		"i will inspect",
-		"i'll explore",
-		"i will explore",
-		"start by exploring",
-		"start by inspecting",
-		"inspect the repository",
-		"explore the directory",
-		"explore the repository",
-		"check the main directories",
-		"check main directories",
-		"look at the directory structure",
-		"look at directory structure",
-		"identify key directories",
-	}
-	for _, phrase := range intentPhrases {
-		if strings.Contains(text, phrase) {
-			return true
-		}
-	}
-	return false
-}
-
-func shouldForceReadContinuation(messages []Message) bool {
+func shouldForceSingleReadFollowup(messages []Message) bool {
 	if len(messages) == 0 {
 		return false
 	}
 	last := messages[len(messages)-1]
-	return last.Role == "user" && strings.Contains(strings.ToLower(extractTextContent(last.Content)), "use the read tool on a representative repository file")
+	if last.Role != "user" {
+		return false
+	}
+	hasToolResult := false
+	for _, part := range last.Content {
+		if part.Type == "tool_result" {
+			hasToolResult = true
+			break
+		}
+	}
+	if !hasToolResult {
+		return false
+	}
+
+	readToolResultsSeen := 0
+	for _, msg := range messages {
+		if msg.Role != "user" {
+			continue
+		}
+		for _, part := range msg.Content {
+			if part.Type == "tool_result" && strings.EqualFold(part.Name, "read") {
+				readToolResultsSeen++
+			}
+		}
+	}
+	return readToolResultsSeen == 0
+}
+
+func shouldForceReadAfterToolResults(messages []Message) bool {
+	return shouldForceSingleReadFollowup(messages)
+}
+
+func shouldForceReadContinuation(messages []Message) bool {
+	return shouldForceSingleReadFollowup(messages)
 }
 
 func extractToolCalls(content []ContentBlock) []tools.ToolCall {

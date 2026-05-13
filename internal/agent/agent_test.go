@@ -67,13 +67,22 @@ func TestBuildRequestRequiresGlobForCodebaseExplanationPrompt(t *testing.T) {
 	}
 }
 
-func TestBuildRequestUsesAutoForConceptualArchitecturePrompt(t *testing.T) {
-	ag := newTestAgent()
-	ag.appendUserMessage("explain the architecture of this repo")
+func TestShouldForceSingleReadFollowup(t *testing.T) {
+	messages := []Message{
+		{Role: "user", Content: []ContentBlock{TextBlock("explain codebase")}},
+		{Role: "assistant", Content: []ContentBlock{{Type: "tool_use", ID: "toolu_glob", Name: "glob", Input: map[string]any{"pattern": "*"}}}},
+		{Role: "user", Content: []ContentBlock{{Type: "tool_result", ToolUseID: "toolu_glob", Name: "glob", Content: "[]"}}},
+	}
+	if !shouldForceSingleReadFollowup(messages) {
+		t.Fatal("expected a single forced read followup after initial non-read tool result")
+	}
 
-	req := ag.buildRequest(0, "explain the architecture of this repo")
-	if req.ToolChoice != "auto" {
-		t.Fatalf("tool choice = %#v, want auto", req.ToolChoice)
+	messages = append(messages,
+		Message{Role: "assistant", Content: []ContentBlock{{Type: "tool_use", ID: "toolu_read", Name: "read", Input: map[string]any{"file_path": "C:\\repo\\go.mod"}}}},
+		Message{Role: "user", Content: []ContentBlock{{Type: "tool_result", ToolUseID: "toolu_read", Name: "read", Content: "module omnicode"}}},
+	)
+	if shouldForceSingleReadFollowup(messages) {
+		t.Fatal("did not expect repeated forced read after a read tool result already occurred")
 	}
 }
 

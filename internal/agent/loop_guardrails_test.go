@@ -36,47 +36,24 @@ func TestRunAbortsOnRepeatedIdenticalToolCalls(t *testing.T) {
 	}
 }
 
-func TestRunContinuesAfterToolIntentTextForCodebasePrompt(t *testing.T) {
-	registry := tools.NewRegistry()
-	registry.Register(tools.Glob())
+func TestBuildRequestForcesSingleReadFollowupAfterInitialToolResult(t *testing.T) {
+	ag := newTestAgent()
+	ag.memory.Append(Message{Role: "user", Content: []ContentBlock{TextBlock("explain codebase")}})
+	ag.memory.Append(Message{Role: "assistant", Content: []ContentBlock{{Type: "tool_use", ID: "toolu_glob", Name: "glob", Input: map[string]any{"pattern": "*"}}}})
+	ag.memory.Append(Message{Role: "user", Content: []ContentBlock{{Type: "tool_result", ToolUseID: "toolu_glob", Name: "glob", Content: "[]"}}})
 
-	step := 0
-	dispatch := func(ctx context.Context, req *MessagesRequest) (<-chan *MessagesResponse, error) {
-		step++
-		ch := make(chan *MessagesResponse, 1)
-		switch step {
-		case 1:
-			ch <- &MessagesResponse{Content: []ContentBlock{{
-				Type: "tool_use",
-				ID:   "toolu_glob",
-				Name: "glob",
-				Input: map[string]any{
-					"pattern": "*",
-				},
-			}}, StopReason: StopReasonToolUse}
-		case 2:
-			ch <- &MessagesResponse{Content: []ContentBlock{TextBlock("Now let me check the main directories:")}, StopReason: StopReasonEndTurn}
-		default:
-			toolChoice, ok := req.ToolChoice.(map[string]any)
-			if !ok || toolChoice["functionName"] != "read" {
-				t.Fatalf("third request tool choice = %#v, want read", req.ToolChoice)
-			}
-			ch <- &MessagesResponse{Content: []ContentBlock{TextBlock("internal/ and frontend/ provider test summary")}, StopReason: StopReasonEndTurn}
-		}
-		close(ch)
-		return ch, nil
+	req := ag.buildRequest(1, "explain codebase")
+	toolChoice, ok := req.ToolChoice.(map[string]any)
+	if !ok || toolChoice["functionName"] != "read" {
+		t.Fatalf("tool choice after initial tool result = %#v, want read", req.ToolChoice)
 	}
 
-	ag := NewAgent(registry, NewBufferMemory(16), 10, dispatch)
-	result, err := ag.Run(context.Background(), "session-codebase-intent", "explain codebase")
-	if err != nil {
-		t.Fatalf("Run returned error: %v", err)
-	}
-	if result.Output != "internal/ and frontend/ provider test summary" {
-		t.Fatalf("output = %q, want final summary", result.Output)
-	}
-	if step != 3 {
-		t.Fatalf("dispatch steps = %d, want 3", step)
+	ag.memory.Append(Message{Role: "assistant", Content: []ContentBlock{{Type: "tool_use", ID: "toolu_read", Name: "read", Input: map[string]any{"file_path": "C:\\repo\\go.mod"}}}})
+	ag.memory.Append(Message{Role: "user", Content: []ContentBlock{{Type: "tool_result", ToolUseID: "toolu_read", Name: "read", Content: "module omnicode"}}})
+
+	req = ag.buildRequest(2, "explain codebase")
+	if req.ToolChoice != "auto" {
+		t.Fatalf("tool choice after first read result = %#v, want auto", req.ToolChoice)
 	}
 }
 
