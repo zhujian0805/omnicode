@@ -1,0 +1,76 @@
+package chat
+
+import (
+	"io"
+	"net/http"
+	"os"
+
+	toolspkg "omnicode/internal/tools"
+)
+
+type permissionRequestMsg struct {
+	req    toolspkg.PermissionRequest
+	respCh chan bool
+}
+
+type Client interface {
+	Get(path string) ([]byte, error)
+	Post(path string, body any) ([]byte, error)
+	Put(path string, body any) ([]byte, error)
+	Delete(path string) ([]byte, error)
+	PostStream(path string, body any) (*http.Response, error)
+}
+
+type CommandContext interface {
+	InOrStdin() io.Reader
+	OutOrStdout() io.Writer
+	ErrOrStderr() io.Writer
+}
+
+type stdioCommandContext struct{}
+
+func (stdioCommandContext) InOrStdin() io.Reader   { return os.Stdin }
+func (stdioCommandContext) OutOrStdout() io.Writer { return os.Stdout }
+func (stdioCommandContext) ErrOrStderr() io.Writer { return os.Stderr }
+
+type SessionState struct {
+	ID           string
+	Model        string
+	Mode         string
+	APIShape     string
+	AgentBackend string
+	SpecMode     string
+	Autopilot    bool
+	IsTTY        bool
+	Picker       ModelPickerFunc
+}
+
+type ModelPickerFunc func(string, []ModelInfo) (string, error)
+
+type Message struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+type ModelInfo struct {
+	ID           string
+	Owner        string
+	OwnerName    string
+	Name         string
+	Selector     string
+	ProviderID   string
+	ProviderName string
+}
+
+type replCommandResult struct {
+	handled      bool
+	exit         bool
+	model        string
+	apiShape     string
+	agentBackend string
+	agentPrompt  string
+}
+
+type sseEvent struct {
+	data []byte
+}

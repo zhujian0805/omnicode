@@ -1,0 +1,814 @@
+<!DOCTYPE html>
+<!-- saved from url=(0073)file:///C:/Users/jzhu/repos/omnillm/docs/OmniLLM_CodeAgent_Test_Plan.html -->
+<html lang="en"><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+  
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OmniLLM CodeAgent Test Plan</title>
+  <style>
+    :root {
+      --bg-0: #f6f8fb;
+      --panel: #ffffff;
+      --ink: #1f2937;
+      --muted: #6b7280;
+      --line: #e5e7eb;
+      --yes: #1f8f4e;
+      --yes-bg: #e8f7ee;
+      --no: #b73a3a;
+      --no-bg: #fdeeee;
+      --none-bg: #f3f4f6;
+      --none-ink: #6b7280;
+      --radius: 12px;
+      --radius-sm: 8px;
+      --shadow: 0 4px 14px rgba(15, 23, 42, 0.06);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--bg-0);
+      font-family: "Segoe UI", "Trebuchet MS", sans-serif;
+      line-height: 1.4;
+      min-height: 100vh;
+    }
+
+    .wrap {
+      width: min(1860px, calc(100% - 14px));
+      margin: 18px auto 22px;
+    }
+
+    .hero {
+      padding: 20px 22px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--panel);
+      box-shadow: var(--shadow);
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: clamp(1.3rem, 1.05rem + 1.2vw, 2rem);
+      letter-spacing: 0.2px;
+    }
+
+    .sub {
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.97rem;
+    }
+
+    .toolbar {
+      margin-top: 16px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    .btn {
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--ink);
+      border-radius: 999px;
+      padding: 8px 13px;
+      font-size: 0.9rem;
+      cursor: pointer;
+      transition: transform 120ms ease, box-shadow 120ms ease, border-color 120ms ease;
+    }
+
+    .btn:hover {
+      transform: translateY(-1px);
+      border-color: #b9ad9a;
+      box-shadow: 0 3px 12px rgba(29, 26, 19, 0.1);
+    }
+
+    .stats {
+      margin-top: 16px;
+      display: grid;
+      grid-template-columns: repeat(3, minmax(140px, 1fr));
+      gap: 10px;
+    }
+
+    .stat {
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      padding: 10px 12px;
+      background: var(--panel);
+    }
+
+    .stat .label {
+      display: block;
+      font-size: 0.75rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    .stat .value {
+      font-size: 1.1rem;
+      font-weight: 700;
+    }
+
+    .table-wrap {
+      margin-top: 16px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      overflow-x: hidden;
+      overflow-y: auto;
+      background: var(--panel);
+      box-shadow: var(--shadow);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+    }
+
+    thead th {
+      text-align: left;
+      font-size: 0.77rem;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: #374151;
+      background: #f9fafb;
+      border-bottom: 1px solid var(--line);
+      padding: 10px 8px;
+      position: sticky;
+      top: 0;
+      z-index: 1;
+    }
+
+    tbody td {
+      padding: 10px 8px;
+      border-bottom: 1px solid #f1f5f9;
+      vertical-align: middle;
+      font-size: 0.88rem;
+      word-break: break-word;
+    }
+
+    td:nth-child(6) {
+      white-space: pre-line;
+    }
+
+    tbody tr:nth-child(odd) {
+      background: #fcfdff;
+    }
+
+    tbody tr:hover {
+      background: #f8fafc;
+    }
+
+    th:nth-child(1), td:nth-child(1) { width: 12%; }
+    th:nth-child(2), td:nth-child(2) { width: 16%; }
+    th:nth-child(3), td:nth-child(3) { width: 13%; }
+    th:nth-child(4), td:nth-child(4) { width: 28%; }
+    th:nth-child(5), td:nth-child(5) { width: 14%; }
+    th:nth-child(6), td:nth-child(6) { width: 17%; }
+
+    .status-cell { min-width: 120px; }
+
+    .toggle-group {
+      display: inline-flex;
+      gap: 6px;
+    }
+
+    .chip {
+      border: 1px solid #d1d5db;
+      border-radius: 999px;
+      padding: 5px 10px;
+      font-size: 0.78rem;
+      line-height: 1;
+      cursor: pointer;
+      user-select: none;
+      transition: all 120ms ease;
+      background: #fff;
+      color: #374151;
+    }
+
+    .chip[aria-pressed="true"][data-value="yes"] {
+      border-color: #95d4ae;
+      background: var(--yes-bg);
+      color: var(--yes);
+      font-weight: 700;
+    }
+
+    .chip[aria-pressed="true"][data-value="no"] {
+      border-color: #e8b2b2;
+      background: var(--no-bg);
+      color: var(--no);
+      font-weight: 700;
+    }
+
+    .chip[aria-pressed="false"] {
+      background: var(--none-bg);
+      color: var(--none-ink);
+    }
+
+    .notes {
+      margin-top: 14px;
+      border: 1px dashed #cbd5e1;
+      border-radius: var(--radius-sm);
+      background: #f8fafc;
+      padding: 12px 14px;
+      color: #475569;
+      font-size: 0.9rem;
+    }
+
+    .notes p {
+      margin: 0 0 8px;
+      font-weight: 600;
+    }
+
+    .notes ul {
+      margin: 0;
+      padding-left: 20px;
+    }
+
+    .save-status {
+      margin-top: 10px;
+      color: #5f584e;
+      font-size: 0.84rem;
+      min-height: 1.2em;
+    }
+
+    @media (max-width: 900px) {
+      .wrap {
+        width: calc(100% - 18px);
+        margin-top: 14px;
+      }
+
+      .hero {
+        padding: 16px;
+      }
+
+      .stats {
+        grid-template-columns: 1fr;
+      }
+
+      table {
+        table-layout: auto;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <section class="hero">
+      <h1>OmniLLM CodeAgent Test Plan</h1>
+      <p class="sub">Click Yes or No to mark each run. Use Connect HTML File once if you want clicks to write into the HTML file.</p>
+      <div class="toolbar">
+        <button class="btn" id="set-all-yes" type="button">Set All Yes</button>
+        <button class="btn" id="set-all-no" type="button">Set All No</button>
+        <button class="btn" id="clear-all" type="button">Clear All</button>
+        <button class="btn" id="connect-file" type="button">Connect HTML File</button>
+        <button class="btn" id="save-html" type="button">Save HTML</button>
+        <button class="btn" id="export-csv" type="button">Export CSV</button>
+      </div>
+      <div class="save-status" id="save-status">Click Connect HTML File once to re-grant permission for auto-save.</div>
+      <div class="stats">
+        <div class="stat">
+          <span class="label">Total</span>
+          <span class="value" id="stat-total">23</span>
+        </div>
+        <div class="stat">
+          <span class="label">Passed (Yes)</span>
+          <span class="value" id="stat-yes">19</span>
+        </div>
+        <div class="stat">
+          <span class="label">Failed (No)</span>
+          <span class="value" id="stat-no">2</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="table-wrap" aria-label="Test Matrix">
+      <table>
+        <thead>
+          <tr>
+            <th>CodeAgent</th>
+            <th>API Shape</th>
+            <th>Provider</th>
+            <th>Model</th>
+            <th>Passed</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody id="plan-body"><tr><td>Claude Code</td><td>anthropic(v1/messages)</td><td>GitHub Models</td><td>claude-haiku-4.5</td><td class="status-cell"><div class="toggle-group"><button type="button" class="chip" data-value="yes" aria-pressed="true">Yes</button><button type="button" class="chip" data-value="no" aria-pressed="false">No</button></div></td><td></td></tr><tr><td>Claude Code</td><td>anthropic(v1/messages)</td><td>GitHub Models</td><td>gpt-5.4</td><td class="status-cell"><div class="toggle-group"><button type="button" class="chip" data-value="yes" aria-pressed="true">Yes</button><button type="button" class="chip" data-value="no" aria-pressed="false">No</button></div></td><td></td></tr><tr><td>Claude Code</td><td>anthropic(v1/messages)</td><td>Azure OpenAI</td><td>gpt-5.4</td><td class="status-cell"><div class="toggle-group"><button type="button" class="chip" data-value="yes" aria-pressed="true">Yes</button><button type="button" class="chip" data-value="no" aria-pressed="false">No</button></div></td><td></td></tr><tr><td>Claude Code</td><td>anthropic(v1/messages)</td><td>Alibaba Qwen</td><td>qwen3.6</td><td class="status-cell"><div class="toggle-group"><button type="button" class="chip" data-value="yes" aria-pressed="true">Yes</button><button type="button" class="chip" data-value="no" aria-pressed="false">No</button></div></td><td></td></tr><tr><td>Codex</td><td>responses</td><td>GitHub Models</td><td>gpt-5-mini</td><td class="status-cell"><div class="toggle-group"><button type="button" class="chip" data-value="yes" aria-pressed="true">Yes</button><button type="button" class="chip" data-value="no" aria-pressed="false">No</button></div></td><td>⚠ Model metadata for `qwen3.6-plus` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.</td></tr><tr><td>Codex</td><td>responses</td><td>GitHub Models</td><td>gpt-5.4</td><td class="status-cell"><div class="toggle-group"><button type="button" class="chip" data-value="yes" aria-pressed="true">Yes</button><button type="button" class="chip" data-value="no" aria-pressed="false">No</button></div></td><td></td></tr><tr><td>Codex</td><td>responses</td><td>Azure OpenAI</td><td>gpt-5.4</td><td class="status-cell"><div class="toggle-group"><button type="button" class="chip" data-value="yes" aria-pressed="true">Yes</button><button type="button" class="chip" data-value="no" aria-pressed="false">No</button></div></td><td></td></tr><tr><td>Codex</td><td>responses</td><td>Alibaba Qwen</td><td>qwen3.6</td><td class="status-cell"><div class="toggle-group"><button type="button" class="chip" data-value="yes" aria-pressed="true">Yes</button><button type="button" class="chip" data-value="no" aria-pressed="false">No</button></div></td><td>⚠ Model metadata for `qwen3.6-plus` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.</td></tr><tr><td>Droid</td><td>anthropic(v1/messages)</td><td>Alibaba Qwen</td><td>qwen3.6</td><td class="status-cell"><div class="toggle-group"><button type="button" class="chip" data-value="yes" aria-pressed="true">Yes</button><button type="button" class="chip" data-value="no" aria-pressed="false">No</button></div></td><td></td></tr><tr><td>Droid</td><td>anthropic(v1/messages)</td><td>Azure OpenAI</td><td>gpt-5.4</td><td class="status-cell"><div class="toggle-group"><button type="button" class="chip" data-value="yes" aria-pressed="true">Yes</button><button type="button" class="chip" data-value="no" aria-pressed="false">No</button></div></td><td></td></tr><tr><td>Droid</td><td>anthropic(v1/messages)</td><td>GitHub Models</td><td>claude-haiku-4.5</td><td class="status-cell"><div class="toggle-group"><button type="button" class="chip" data-value="yes" aria-pressed="true">Yes</button><button type="button" class="chip" data-value="no" aria-pressed="false">No</button></div></td><td></td></tr><tr><td>Droid</td><td>anthropic(v1/messages)</td><td>GitHub Models</td><td>gpt-5-mini</td><td class="status-cell"><div class="toggle-group"><button type="button" class="chip" data-value="yes" aria-pressed="true">Yes</button><button type="button" class="chip" data-value="no" aria-pressed="false">No</button></div></td><td></td></tr><tr><td>Droid</td><td>anthropic(v1/messages)</td><td>GitHub Models</td><td>gpt-5.4</td><td class="status-cell"><div class="toggle-group"><button type="button" class="chip" data-value="yes" aria-pressed="false">Yes</button><button type="button" class="chip" data-value="no" aria-pressed="false">No</button></div></td><td></td></tr><tr><td>Droid</td><td>chat completions</td><td>Alibaba Qwen</td><td>qwen3.6</td><td class="status-cell"><div class="toggle-group"><button type="button" class="chip" data-value="yes" aria-pressed="false">Yes</button><button type="button" class="chip" data-value="no" aria-pressed="true">No</button></div></td><td>explain codebase
+
+⛬  Let me read the key files to understand the project structure.
+
+
+
+   Read 13 files
+    13 files failed
+
+ ⠫ Streaming...  (Press ESC to stop)
+
+ Auto (Off) - all actions require approval</td></tr><tr><td>Droid</td><td>chat completions</td><td>Azure OpenAI</td><td>gpt-5.4</td><td class="status-cell"><div class="toggle-group"><button type="button" class="chip" data-value="yes" aria-pressed="true">Yes</button><button type="button" class="chip" data-value="no" aria-pressed="false">No</button></div></td><td></td></tr><tr><td>Droid</td><td>chat completions</td><td>GitHub Models</td><td>claude-haiku-4.5</td><td class="status-cell"><div class="toggle-group"><button type="button" class="chip" data-value="yes" aria-pressed="true">Yes</button><button type="button" class="chip" data-value="no" aria-pressed="false">No</button></div></td><td></td></tr><tr><td>Droid</td><td>chat completions</td><td>GitHub Models</td><td>gpt-5-mini</td><td class="status-cell"><div class="toggle-group"><button type="button" class="chip" data-value="yes" aria-pressed="true">Yes</button><button type="button" class="chip" data-value="no" aria-pressed="false">No</button></div></td><td></td></tr><tr><td>Droid</td><td>chat completions</td><td>GitHub Models</td><td>gpt-5.4</td><td class="status-cell"><div class="toggle-group"><button type="button" class="chip" data-value="yes" aria-pressed="true">Yes</button><button type="button" class="chip" data-value="no" aria-pressed="false">No</button></div></td><td></td></tr><tr><td>Droid</td><td>responses</td><td>Alibaba Qwen</td><td>qwen3.6</td><td class="status-cell"><div class="toggle-group"><button type="button" class="chip" data-value="yes" aria-pressed="true">Yes</button><button type="button" class="chip" data-value="no" aria-pressed="false">No</button></div></td><td>http://localhost:5000/v1</td></tr><tr><td>Droid</td><td>responses</td><td>Azure OpenAI</td><td>gpt-5.4</td><td class="status-cell"><div class="toggle-group"><button type="button" class="chip" data-value="yes" aria-pressed="true">Yes</button><button type="button" class="chip" data-value="no" aria-pressed="false">No</button></div></td><td>http://localhost:5000/v1</td></tr><tr><td>Droid</td><td>responses</td><td>GitHub Models</td><td>claude-haiku-4.5</td><td class="status-cell"><div class="toggle-group"><button type="button" class="chip" data-value="yes" aria-pressed="true">Yes</button><button type="button" class="chip" data-value="no" aria-pressed="false">No</button></div></td><td></td></tr><tr><td>Droid</td><td>responses</td><td>GitHub Models</td><td>gpt-5-mini</td><td class="status-cell"><div class="toggle-group"><button type="button" class="chip" data-value="yes" aria-pressed="false">Yes</button><button type="button" class="chip" data-value="no" aria-pressed="true">No</button></div></td><td>Plan · 0/5
+┃ ● Scan repository structure and locate key files (package.json, bunfig.toml, tsconfig.json, src/, frontend/, docs/, tests/)
+┃ ○ Read package.json, bunfig.toml, tsconfig.json, and README to determine build/test/run commands and dependencies
+┃ ○ Summarize main components (backend, frontend, CLI, tests, docs) and identify entry points
+┃ ○ Produce a high-level architecture diagram (text) and developer onboarding steps (build, dev, test)
+┃ ○ Highlight likely areas for contributors and any immediate code smells or TODOs
+
+ Auto (Off) - all actions require approval</td></tr><tr><td>Droid</td><td>responses</td><td>GitHub Models</td><td>gpt-5.4</td><td class="status-cell"><div class="toggle-group"><button type="button" class="chip" data-value="yes" aria-pressed="false">Yes</button><button type="button" class="chip" data-value="no" aria-pressed="false">No</button></div></td><td>http://localhost:5000/v1</td></tr></tbody>
+      </table>
+    </section>
+
+    <section class="notes">
+      <p>Notes</p>
+      <ul>
+        <li>Claude Code always sends Anthropic Messages API shape: anthropic(v1/messages).</li>
+        <li>Codex currently supports Responses API shape only: responses.</li>
+        <li>Droid should be validated across chat completions, anthropic(v1/messages), and responses.</li>
+        <li>Droid responses API all use the /v1 endpoint.</li>
+        <li>Droid + chat completions + GitHub Models (claude-haiku-4.5, gpt-5-mini): does not complete all tasks and stops in the middle.</li>
+        <li>Droid + responses + GitHub Models (gpt-5-mini): BYOK error observed: undefined is not an object (evaluating 'E.type'); verify custom model configuration in settings if it persists.</li>
+      </ul>
+    </section>
+  </main>
+
+  <script id="embedded-state" type="application/json">
+{
+  "Claude Code|anthropic(v1/messages)|GitHub Models|claude-haiku-4.5": "yes",
+  "Claude Code|anthropic(v1/messages)|GitHub Models|gpt-5.4": "",
+  "Claude Code|anthropic(v1/messages)|Azure OpenAI|gpt-5.4": "yes",
+  "Claude Code|anthropic(v1/messages)|Alibaba Qwen|qwen3.6": "yes",
+  "Codex|responses|GitHub Models|gpt-5-mini": "yes",
+  "Codex|responses|GitHub Models|gpt-5-mini|description": "⚠ Model metadata for `qwen3.6-plus` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.",
+  "Codex|responses|GitHub Models|gpt-5.4": "",
+  "Droid|anthropic(v1/messages)|Alibaba Qwen|qwen3.6": "yes",
+  "Codex|responses|Alibaba Qwen|qwen3.6": "yes",
+  "Codex|responses|Alibaba Qwen|qwen3.6|description": "⚠ Model metadata for `qwen3.6-plus` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.",
+  "Droid|anthropic(v1/messages)|GitHub Models|claude-haiku-4.5": "yes",
+  "Droid|anthropic(v1/messages)|GitHub Models|gpt-5-mini": "yes",
+  "Droid|anthropic(v1/messages)|GitHub Models|gpt-5.4": "",
+  "Droid|anthropic(v1/messages)|Azure OpenAI|gpt-5.4": "yes",
+  "Droid|chat completions|GitHub Models|claude-haiku-4.5": "yes",
+  "Droid|chat completions|GitHub Models|gpt-5-mini": "yes",
+  "Droid|chat completions|GitHub Models|gpt-5.4": "",
+  "Droid|chat completions|Alibaba Qwen|qwen3.6": "no",
+  "Droid|chat completions|Alibaba Qwen|qwen3.6|description": "explain codebase\n\n⛬  Let me read the key files to understand the project structure.\n\n\n\n   Read 13 files\n    13 files failed\n\n ⠫ Streaming...  (Press ESC to stop)\n\n Auto (Off) - all actions require approval",
+  "Droid|chat completions|Azure OpenAI|gpt-5.4": "no",
+  "Droid|responses|Alibaba Qwen|qwen3.6": "yes",
+  "Droid|responses|Alibaba Qwen|qwen3.6|description": "http://localhost:5000/v1",
+  "Droid|responses|GitHub Models|gpt-5-mini|description": "explain codebase\n\nRead 1 file\n ↳ ~\\repos\\omnillm\\package.json\n\nGlob 1 pattern\n ↳ src/**, docs/**, README*, *.md, package.json\n\nPlan updated\n\n●  BYOK Error: undefined is not an object (evaluating 'E.type')\n\nIf this persists, verify your custom model configuration in settings.\n\nPlan · 0/5\n┃ ● Survey repository and produce a high-level summary of the codebase (structure, key modules, entry points).\n┃ ○ Summarize the purpose and responsibilities of top-level src/ packages and important files.\n┃ ○ List build, dev, lint, and test commands and any special runtime requirements.\n┃ ○ Identify documentation files and where to find design/critical-change docs.\n┃ ○ Note any immediate issues or missing dev tools observed in the environment.",
+  "Droid|responses|GitHub Models|gpt-5.4": "",
+  "Droid|responses|GitHub Models|claude-haiku-4.5": "no",
+  "Droid|responses|GitHub Models|gpt-5-mini": "no"
+}
+</script>
+
+  <script>
+    const STORAGE_KEY = "omnillm_codeagent_test_plan_v1";
+    const EMBEDDED_STATE_ID = "embedded-state";
+    const HANDLE_DB_NAME = "omnillm_codeagent_handles";
+    const HANDLE_STORE_NAME = "fileHandles";
+    const HANDLE_KEY = "testPlanHtmlFile";
+
+    const rows = [
+      ["Claude Code", "anthropic(v1/messages)", "GitHub Models", "claude-haiku-4.5"],
+      ["Claude Code", "anthropic(v1/messages)", "GitHub Models", "gpt-5.4"],
+      ["Claude Code", "anthropic(v1/messages)", "Azure OpenAI", "gpt-5.4"],
+      ["Claude Code", "anthropic(v1/messages)", "Alibaba Qwen", "qwen3.6"],
+      ["Codex", "responses", "GitHub Models", "gpt-5-mini"],
+      ["Codex", "responses", "GitHub Models", "gpt-5.4"],
+      ["Codex", "responses", "Azure OpenAI", "gpt-5.4"],
+      ["Codex", "responses", "Alibaba Qwen", "qwen3.6"],
+      ["Droid", "anthropic(v1/messages)", "Alibaba Qwen", "qwen3.6"],
+      ["Droid", "anthropic(v1/messages)", "Azure OpenAI", "gpt-5.4"],
+      ["Droid", "anthropic(v1/messages)", "GitHub Models", "claude-haiku-4.5"],
+      ["Droid", "anthropic(v1/messages)", "GitHub Models", "gpt-5-mini"],
+      ["Droid", "anthropic(v1/messages)", "GitHub Models", "gpt-5.4"],
+      ["Droid", "chat completions", "Alibaba Qwen", "qwen3.6"],
+      ["Droid", "chat completions", "Azure OpenAI", "gpt-5.4"],
+      ["Droid", "chat completions", "GitHub Models", "claude-haiku-4.5"],
+      ["Droid", "chat completions", "GitHub Models", "gpt-5-mini"],
+      ["Droid", "chat completions", "GitHub Models", "gpt-5.4"],
+      ["Droid", "responses", "Alibaba Qwen", "qwen3.6"],
+      ["Droid", "responses", "Azure OpenAI", "gpt-5.4"],
+      ["Droid", "responses", "GitHub Models", "claude-haiku-4.5"],
+      ["Droid", "responses", "GitHub Models", "gpt-5-mini"],
+      ["Droid", "responses", "GitHub Models", "gpt-5.4"]
+    ];
+
+    const body = document.getElementById("plan-body");
+    const statTotal = document.getElementById("stat-total");
+    const statYes = document.getElementById("stat-yes");
+    const statNo = document.getElementById("stat-no");
+    const saveStatus = document.getElementById("save-status");
+
+    let connectedFileHandle = null;
+
+    function openHandleDb() {
+      return new Promise((resolve, reject) => {
+        const req = indexedDB.open(HANDLE_DB_NAME, 1);
+
+        req.onupgradeneeded = () => {
+          const db = req.result;
+          if (!db.objectStoreNames.contains(HANDLE_STORE_NAME)) {
+            db.createObjectStore(HANDLE_STORE_NAME);
+          }
+        };
+
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+    }
+
+    async function idbGetHandle() {
+      if (!window.indexedDB) {
+        return null;
+      }
+
+      const db = await openHandleDb();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(HANDLE_STORE_NAME, "readonly");
+        const store = tx.objectStore(HANDLE_STORE_NAME);
+        const req = store.get(HANDLE_KEY);
+
+        req.onsuccess = () => resolve(req.result || null);
+        req.onerror = () => reject(req.error);
+      });
+    }
+
+    async function idbSetHandle(handle) {
+      if (!window.indexedDB) {
+        return;
+      }
+
+      const db = await openHandleDb();
+      await new Promise((resolve, reject) => {
+        const tx = db.transaction(HANDLE_STORE_NAME, "readwrite");
+        const store = tx.objectStore(HANDLE_STORE_NAME);
+        const req = store.put(handle, HANDLE_KEY);
+
+        req.onsuccess = () => resolve();
+        req.onerror = () => reject(req.error);
+      });
+    }
+
+    async function idbClearHandle() {
+      if (!window.indexedDB) {
+        return;
+      }
+
+      const db = await openHandleDb();
+      await new Promise((resolve, reject) => {
+        const tx = db.transaction(HANDLE_STORE_NAME, "readwrite");
+        const store = tx.objectStore(HANDLE_STORE_NAME);
+        const req = store.delete(HANDLE_KEY);
+
+        req.onsuccess = () => resolve();
+        req.onerror = () => reject(req.error);
+      });
+    }
+
+    async function ensurePermission(handle, request) {
+      if (!handle) {
+        return false;
+      }
+
+      const opts = { mode: "readwrite" };
+      if (await handle.queryPermission(opts) === "granted") {
+        return true;
+      }
+
+      if (!request) {
+        return false;
+      }
+
+      return (await handle.requestPermission(opts)) === "granted";
+    }
+
+    function rowKey(row) {
+      return row.join("|");
+    }
+
+    function setSaveStatus(message) {
+      saveStatus.textContent = message;
+    }
+
+    function getDescription(row) {
+      if (
+        row[0] === "Codex" &&
+        row[1] === "responses" &&
+        row[2] === "GitHub Models" &&
+        row[3] === "gpt-5-mini"
+      ) {
+        return "⚠ Model metadata for `qwen3.6-plus` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.";
+      }
+      if (
+        row[0] === "Codex" &&
+        row[1] === "responses" &&
+        row[2] === "Alibaba Qwen" &&
+        row[3] === "qwen3.6"
+      ) {
+        return "⚠ Model metadata for `qwen3.6-plus` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.";
+      }
+      if (
+        row[0] === "Droid" &&
+        row[1] === "chat completions" &&
+        row[2] === "Alibaba Qwen" &&
+        row[3] === "qwen3.6"
+      ) {
+        return "explain codebase\n\n⛬  Let me read the key files to understand the project structure.\n\n\n\n   Read 13 files\n    13 files failed\n\n ⠫ Streaming...  (Press ESC to stop)\n\n Auto (Off) - all actions require approval";
+      }
+      if (
+        row[0] === "Droid" &&
+        row[1] === "responses" &&
+        row[2] === "GitHub Models" &&
+        row[3] === "gpt-5-mini"
+      ) {
+        return "explain codebase\n\nRead 1 file\n ↳ ~\\repos\\omnillm\\package.json\n\nGlob 1 pattern\n ↳ src/**, docs/**, README*, *.md, package.json\n\nPlan updated\n\n●  BYOK Error: undefined is not an object (evaluating 'E.type')\n\nIf this persists, verify your custom model configuration in settings.\n\nPlan · 0/5\n┃ ● Survey repository and produce a high-level summary of the codebase (structure, key modules, entry points).\n┃ ○ Summarize the purpose and responsibilities of top-level src/ packages and important files.\n┃ ○ List build, dev, lint, and test commands and any special runtime requirements.\n┃ ○ Identify documentation files and where to find design/critical-change docs.\n┃ ○ Note any immediate issues or missing dev tools observed in the environment.";
+      }
+      if (
+        row[0] === "Droid" &&
+        row[1] === "responses" &&
+        row[2] === "GitHub Models" &&
+        row[3] === "claude-haiku-4.5"
+      ) {
+        return "";
+      }
+      if (row[0] === "Droid" && row[1] === "responses") {
+        return "http://localhost:5000/v1";
+      }
+      if (
+        row[0] === "Droid" &&
+        row[1] === "chat completions" &&
+        row[2] === "GitHub Models" &&
+        row[3] === "gpt-5-mini"
+      ) {
+        return "";
+      }
+      return "";
+    }
+
+    function loadEmbeddedState() {
+      const el = document.getElementById(EMBEDDED_STATE_ID);
+      if (!el || !el.textContent.trim()) {
+        return {};
+      }
+      try {
+        return JSON.parse(el.textContent);
+      } catch {
+        return {};
+      }
+    }
+
+    function loadState() {
+      try {
+        const data = localStorage.getItem(STORAGE_KEY);
+        if (data) {
+          return JSON.parse(data);
+        }
+        return loadEmbeddedState();
+      } catch {
+        return loadEmbeddedState();
+      }
+    }
+
+    function saveState(state) {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      if (connectedFileHandle) {
+        saveHtmlToConnectedFile(state, true);
+      }
+    }
+
+    function buildSnapshotHtml(state) {
+      const json = JSON.stringify(state, null, 2).replaceAll("<", "\\u003c");
+      const docClone = document.documentElement.cloneNode(true);
+      const stateNode = docClone.querySelector("#embedded-state");
+      if (stateNode) {
+        stateNode.textContent = `\n${json}\n`;
+      }
+      return `<!doctype html>\n${docClone.outerHTML}`;
+    }
+
+    function downloadSnapshot(state) {
+      const html = buildSnapshotHtml(state);
+      const blob = new Blob([html], { type: "text/html;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "OmniLLM_CodeAgent_Test_Plan.html";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    }
+
+    async function connectHtmlFile() {
+      if (!window.showSaveFilePicker) {
+        setSaveStatus("Direct in-place save is not supported in this browser context.");
+        return;
+      }
+
+      try {
+        connectedFileHandle = await window.showSaveFilePicker({
+          suggestedName: "OmniLLM_CodeAgent_Test_Plan.html",
+          types: [{
+            description: "HTML",
+            accept: { "text/html": [".html"] }
+          }]
+        });
+        await idbSetHandle(connectedFileHandle);
+        await saveHtmlToConnectedFile(loadState(), false);
+        setSaveStatus("Connected. Yes/No changes now auto-save to the selected HTML file.");
+      } catch {
+        setSaveStatus("File connection was cancelled.");
+      }
+    }
+
+    async function saveHtmlToConnectedFile(state, quiet) {
+      if (!connectedFileHandle) {
+        return;
+      }
+      try {
+        const writable = await connectedFileHandle.createWritable();
+        await writable.write(buildSnapshotHtml(state));
+        await writable.close();
+        if (!quiet) {
+          setSaveStatus("Saved to connected HTML file.");
+        }
+      } catch {
+        connectedFileHandle = null;
+        await idbClearHandle();
+        setSaveStatus("Could not write to file. Click Connect HTML File and try again.");
+      }
+    }
+
+    async function initAutoFileConnection() {
+      if (!window.showSaveFilePicker || !window.indexedDB) {
+        setSaveStatus("In-place save is unavailable in this browser context.");
+        return;
+      }
+
+      try {
+        const storedHandle = await idbGetHandle();
+        if (!storedHandle) {
+          setSaveStatus("Tip: click Connect HTML File once. Future opens can auto-save this file.");
+          return;
+        }
+
+        const granted = await ensurePermission(storedHandle, false);
+        if (!granted) {
+          setSaveStatus("Click Connect HTML File once to re-grant permission for auto-save.");
+          return;
+        }
+
+        connectedFileHandle = storedHandle;
+        setSaveStatus("Auto-connected to saved HTML file. Yes/No clicks now auto-save.");
+      } catch {
+        await idbClearHandle();
+        setSaveStatus("Could not restore saved file handle. Click Connect HTML File.");
+      }
+    }
+
+    async function saveHtml() {
+      const state = loadState();
+
+      if (connectedFileHandle) {
+        await saveHtmlToConnectedFile(state, false);
+        return;
+      }
+
+      setSaveStatus("Save HTML writes in-place only. Click Connect HTML File once first.");
+    }
+
+    function updateStats(state) {
+      const values = rows.map((r) => state[rowKey(r)] || "");
+      const yesCount = values.filter((v) => v === "yes").length;
+      const noCount = values.filter((v) => v === "no").length;
+
+      statTotal.textContent = String(rows.length);
+      statYes.textContent = String(yesCount);
+      statNo.textContent = String(noCount);
+    }
+
+    function setButtonState(group, value) {
+      const yes = group.querySelector('[data-value="yes"]');
+      const no = group.querySelector('[data-value="no"]');
+      yes.setAttribute("aria-pressed", value === "yes" ? "true" : "false");
+      no.setAttribute("aria-pressed", value === "no" ? "true" : "false");
+    }
+
+    function buildTable() {
+      const state = loadState();
+      body.innerHTML = "";
+
+      rows.forEach((row) => {
+        const tr = document.createElement("tr");
+        row.forEach((cell) => {
+          const td = document.createElement("td");
+          td.textContent = cell;
+          tr.appendChild(td);
+        });
+
+        const statusTd = document.createElement("td");
+        statusTd.className = "status-cell";
+
+        const group = document.createElement("div");
+        group.className = "toggle-group";
+
+        const yesBtn = document.createElement("button");
+        yesBtn.type = "button";
+        yesBtn.className = "chip";
+        yesBtn.dataset.value = "yes";
+        yesBtn.textContent = "Yes";
+
+        const noBtn = document.createElement("button");
+        noBtn.type = "button";
+        noBtn.className = "chip";
+        noBtn.dataset.value = "no";
+        noBtn.textContent = "No";
+
+        group.append(yesBtn, noBtn);
+        statusTd.appendChild(group);
+        tr.appendChild(statusTd);
+
+        const key = rowKey(row);
+        const current = state[key] || "";
+        setButtonState(group, current);
+
+        yesBtn.addEventListener("click", () => {
+          const fresh = loadState();
+          fresh[key] = fresh[key] === "yes" ? "" : "yes";
+          saveState(fresh);
+          setButtonState(group, fresh[key]);
+          updateStats(fresh);
+        });
+
+        noBtn.addEventListener("click", () => {
+          const fresh = loadState();
+          fresh[key] = fresh[key] === "no" ? "" : "no";
+          saveState(fresh);
+          setButtonState(group, fresh[key]);
+          updateStats(fresh);
+        });
+
+        const descriptionTd = document.createElement("td");
+        descriptionTd.textContent = getDescription(row);
+        tr.appendChild(descriptionTd);
+
+        body.appendChild(tr);
+      });
+
+      updateStats(state);
+    }
+
+    function setAll(value) {
+      const state = {};
+      rows.forEach((row) => {
+        state[rowKey(row)] = value;
+      });
+      saveState(state);
+      buildTable();
+    }
+
+    function clearAll() {
+      const state = {};
+      saveState(state);
+      buildTable();
+    }
+
+    function exportCsv() {
+      const state = loadState();
+      const lines = [["CodeAgent", "API Shape", "Provider", "Model", "Passed", "Description"]];
+      rows.forEach((r) => {
+        const val = state[rowKey(r)] || "";
+        const passed = val === "yes" ? "Yes" : val === "no" ? "No" : "";
+        const description = getDescription(r);
+        lines.push([r[0], r[1], r[2], r[3], passed, description]);
+      });
+
+      const csv = lines
+        .map((line) => line.map((item) => `"${String(item).replaceAll('"', '""')}"`).join(","))
+        .join("\n");
+
+      const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "OmniLLM_CodeAgent_Test_Plan_Status.csv";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    }
+
+    document.getElementById("set-all-yes").addEventListener("click", () => setAll("yes"));
+    document.getElementById("set-all-no").addEventListener("click", () => setAll("no"));
+    document.getElementById("clear-all").addEventListener("click", clearAll);
+    document.getElementById("connect-file").addEventListener("click", connectHtmlFile);
+    document.getElementById("save-html").addEventListener("click", saveHtml);
+    document.getElementById("export-csv").addEventListener("click", exportCsv);
+
+    buildTable();
+    initAutoFileConnection();
+  </script>
+
+</body></html>
