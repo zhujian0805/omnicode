@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+
+	"github.com/rs/zerolog/log"
 )
 
 // send_message — send a message to another running agent or sub-process.
@@ -133,7 +135,7 @@ func OrchestrateAgents() Tool { return &orchestrateAgentsTool{} }
 
 func (t *orchestrateAgentsTool) Name() string { return "orchestrate_agents" }
 func (t *orchestrateAgentsTool) Description() string {
-	return "Run multi-agent orchestration with built-in patterns: fan_out, pipeline, supervisor, or generator_evaluator. " +
+	return "Run multi-agent orchestration with built-in patterns: fan_out, pipeline, supervisor, generator_evaluator, or planner_generator_evaluator. " +
 		"Each task is sent to a named worker via send_message, and results are aggregated."
 }
 func (t *orchestrateAgentsTool) InputSchema() map[string]any {
@@ -142,7 +144,7 @@ func (t *orchestrateAgentsTool) InputSchema() map[string]any {
 		"properties": map[string]any{
 			"pattern": map[string]any{
 				"type":        "string",
-				"enum":        []string{"fan_out", "pipeline", "supervisor", "generator_evaluator"},
+				"enum":        []string{"fan_out", "pipeline", "supervisor", "generator_evaluator", "planner_generator_evaluator", "initializer_coder"},
 				"description": "Orchestration pattern.",
 			},
 			"tasks": map[string]any{
@@ -164,6 +166,10 @@ func (t *orchestrateAgentsTool) InputSchema() map[string]any {
 				"type":        "string",
 				"description": "Success criteria used by evaluator in generator_evaluator pattern.",
 			},
+			"max_replans": map[string]any{
+				"type":        "integer",
+				"description": "Maximum replan cycles for planner_generator_evaluator (default 2, max 5).",
+			},
 		},
 		"required": []string{"pattern", "tasks"},
 	}
@@ -183,6 +189,7 @@ func (t *orchestrateAgentsTool) Execute(ctx context.Context, call Context, input
 		SupervisorWorker string `json:"supervisor_worker"`
 		SupervisorPrompt string `json:"supervisor_prompt"`
 		MaxRounds        int    `json:"max_rounds"`
+		MaxReplans       int    `json:"max_replans"`
 		Acceptance       string `json:"acceptance_criteria"`
 	}
 	if err := json.Unmarshal(input, &p); err != nil {
@@ -204,6 +211,13 @@ func (t *orchestrateAgentsTool) Execute(ctx context.Context, call Context, input
 		}
 	}
 
+	log.Debug().
+		Str("pattern", pattern).
+		Int("tasks", len(p.Tasks)).
+		Int("max_rounds", p.MaxRounds).
+		Int("max_replans", p.MaxReplans).
+		Msg("orchestrate_agents: starting pattern")
+
 	switch pattern {
 	case "fan_out":
 		return runFanOut(ctx, call.SendMessageFn, p.Tasks)
@@ -213,8 +227,12 @@ func (t *orchestrateAgentsTool) Execute(ctx context.Context, call Context, input
 		return runSupervisor(ctx, call.SendMessageFn, p.Tasks, p.SupervisorWorker, p.SupervisorPrompt)
 	case "generator_evaluator":
 		return runGeneratorEvaluator(ctx, call.SendMessageFn, p.Tasks, p.MaxRounds, p.Acceptance)
+	case "planner_generator_evaluator":
+		return runPlannerGeneratorEvaluator(ctx, call.SendMessageFn, p.Tasks, p.MaxRounds, p.MaxReplans, p.Acceptance)
+	case "initializer_coder":
+		return runInitializerCoder(ctx, call.SendMessageFn, p.Tasks)
 	default:
-		return Result{Output: "error: pattern must be one of fan_out, pipeline, supervisor, generator_evaluator", IsError: true}
+		return Result{Output: "error: pattern must be one of fan_out, pipeline, supervisor, generator_evaluator, planner_generator_evaluator, initializer_coder", IsError: true}
 	}
 }
 
@@ -272,6 +290,9 @@ func runPipeline(
 	var previous string
 	sb.WriteString("Pattern: pipeline\n")
 	for i, task := range tasks {
+		if err := ctx.Err(); err != nil {
+			return Result{Title: "Pipeline orchestration", Output: fmt.Sprintf("pipeline cancelled at stage %d: %v", i+1, err), IsError: true}
+		}
 		prompt := task.Prompt
 		if strings.TrimSpace(previous) != "" {
 			prompt += "\n\nPrevious stage output:\n" + previous
@@ -369,18 +390,41 @@ func runGeneratorEvaluator(
 
 	bestCandidate := ""
 	for round := 1; round <= maxRounds; round++ {
+		if err := ctx.Err(); err != nil {
+			return Result{Title: "Generator-evaluator orchestration", Output: fmt.Sprintf("cancelled at round %d: %v", round, err), IsError: true}
+		}
+		log.Debug().
+			Int("round", round).
+			Int("max_rounds", maxRounds).
+			Str("generator", generator.Worker).
+			Str("evaluator", evaluator.Worker).
+			Msg("orchestrate_agents: generator_evaluator round started")
+
 		genPrompt := currentSpec
 		if bestCandidate != "" {
 			genPrompt += "\n\nPrevious draft:\n" + bestCandidate
 		}
 		candidate, err := sendMessageFn(ctx, generator.Worker, genPrompt)
 		if err != nil {
+			log.Debug().
+				Int("round", round).
+				Str("worker", generator.Worker).
+				Err(err).
+				Msg("orchestrate_agents: generator_evaluator generator failed")
 			return Result{Title: "Generator-evaluator orchestration", Output: fmt.Sprintf("generator failed at round %d: %v", round, err), IsError: true}
 		}
 		candidate = strings.TrimSpace(candidate)
 		if candidate == "" {
+			log.Debug().
+				Int("round", round).
+				Str("worker", generator.Worker).
+				Msg("orchestrate_agents: generator_evaluator generator returned empty output")
 			return Result{Title: "Generator-evaluator orchestration", Output: fmt.Sprintf("generator returned empty output at round %d", round), IsError: true}
 		}
+		log.Debug().
+			Int("round", round).
+			Int("candidate_chars", len(candidate)).
+			Msg("orchestrate_agents: generator_evaluator candidate produced")
 
 		evalPrompt := "Evaluate the candidate against the acceptance criteria. " +
 			"Start your answer with either PASS or FAIL on the first token. " +
@@ -388,6 +432,11 @@ func runGeneratorEvaluator(
 			"\n\nCandidate:\n" + candidate
 		assessment, err := sendMessageFn(ctx, evaluator.Worker, evalPrompt)
 		if err != nil {
+			log.Debug().
+				Int("round", round).
+				Str("worker", evaluator.Worker).
+				Err(err).
+				Msg("orchestrate_agents: generator_evaluator evaluator failed")
 			return Result{Title: "Generator-evaluator orchestration", Output: fmt.Sprintf("evaluator failed at round %d: %v", round, err), IsError: true}
 		}
 		assessment = strings.TrimSpace(assessment)
@@ -397,13 +446,289 @@ func runGeneratorEvaluator(
 
 		normalizedAssessment := strings.ToUpper(strings.TrimSpace(assessment))
 		if strings.HasPrefix(normalizedAssessment, "PASS") {
+			log.Debug().
+				Int("round", round).
+				Msg("orchestrate_agents: generator_evaluator converged")
 			fmt.Fprintf(&sb, "\nConverged: evaluator accepted output in round %d.\n", round)
 			return Result{Title: "Generator-evaluator orchestration", Output: strings.TrimSpace(sb.String())}
 		}
+		log.Debug().
+			Int("round", round).
+			Int("assessment_chars", len(assessment)).
+			Msg("orchestrate_agents: generator_evaluator feedback captured")
 
 		currentSpec = generator.Prompt + "\n\nEvaluator feedback to address:\n" + assessment
 	}
 
+	log.Debug().
+		Int("max_rounds", maxRounds).
+		Msg("orchestrate_agents: generator_evaluator reached max rounds")
 	fmt.Fprintf(&sb, "\nReached max rounds (%d) without PASS. Returning best candidate from final round.\n", maxRounds)
 	return Result{Title: "Generator-evaluator orchestration", Output: strings.TrimSpace(sb.String())}
+}
+
+func runPlannerGeneratorEvaluator(
+	ctx context.Context,
+	sendMessageFn func(context.Context, string, string) (string, error),
+	tasks []struct {
+		Worker string `json:"worker"`
+		Prompt string `json:"prompt"`
+	},
+	maxRounds int,
+	maxReplans int,
+	acceptanceCriteria string,
+) Result {
+	if len(tasks) < 3 {
+		return Result{Output: "error: planner_generator_evaluator requires at least three tasks: planner, generator, and evaluator", IsError: true}
+	}
+
+	planner := tasks[0]
+	generator := tasks[1]
+	evaluator := tasks[2]
+	if strings.TrimSpace(planner.Worker) == "" || strings.TrimSpace(generator.Worker) == "" || strings.TrimSpace(evaluator.Worker) == "" {
+		return Result{Output: "error: planner, generator, and evaluator workers are required", IsError: true}
+	}
+
+	if maxRounds <= 0 {
+		maxRounds = 3
+	}
+	if maxRounds > 10 {
+		maxRounds = 10
+	}
+	if maxReplans <= 0 {
+		maxReplans = 2
+	}
+	if maxReplans > 5 {
+		maxReplans = 5
+	}
+
+	goal := strings.TrimSpace(generator.Prompt)
+	if goal == "" {
+		return Result{Output: "error: generator prompt cannot be empty", IsError: true}
+	}
+
+	acceptanceCriteria = strings.TrimSpace(acceptanceCriteria)
+	if acceptanceCriteria == "" {
+		acceptanceCriteria = "Output is correct, complete, and production-ready."
+	}
+
+	plannerInstructions := strings.TrimSpace(planner.Prompt)
+	if plannerInstructions == "" {
+		plannerInstructions = "Decompose the goal into concrete implementation steps and explicit success criteria checkpoints."
+	}
+
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "Pattern: planner_generator_evaluator\nPlanner: %s\nGenerator: %s\nEvaluator: %s\nMax rounds: %d\nMax replans: %d\n", planner.Worker, generator.Worker, evaluator.Worker, maxRounds, maxReplans)
+
+	lastFeedback := ""
+	bestCandidate := ""
+	for replan := 1; replan <= maxReplans+1; replan++ {
+		if err := ctx.Err(); err != nil {
+			return Result{Title: "Planner-generator-evaluator orchestration", Output: fmt.Sprintf("cancelled at cycle %d: %v", replan, err), IsError: true}
+		}
+		log.Debug().
+			Int("replan_cycle", replan).
+			Int("max_replan_cycles", maxReplans+1).
+			Str("planner", planner.Worker).
+			Str("generator", generator.Worker).
+			Str("evaluator", evaluator.Worker).
+			Msg("orchestrate_agents: planner_generator_evaluator cycle started")
+
+		planPrompt := plannerInstructions + "\n\nGoal:\n" + goal + "\n\nAcceptance criteria:\n" + acceptanceCriteria
+		if strings.TrimSpace(lastFeedback) != "" {
+			planPrompt += "\n\nPrior evaluator failures to address:\n" + lastFeedback
+		}
+
+		plan, err := sendMessageFn(ctx, planner.Worker, planPrompt)
+		if err != nil {
+			log.Debug().
+				Int("replan_cycle", replan).
+				Str("worker", planner.Worker).
+				Err(err).
+				Msg("orchestrate_agents: planner failed")
+			return Result{Title: "Planner-generator-evaluator orchestration", Output: fmt.Sprintf("planner failed at cycle %d: %v", replan, err), IsError: true}
+		}
+		plan = strings.TrimSpace(plan)
+		if plan == "" {
+			log.Debug().
+				Int("replan_cycle", replan).
+				Str("worker", planner.Worker).
+				Msg("orchestrate_agents: planner returned empty plan")
+			return Result{Title: "Planner-generator-evaluator orchestration", Output: fmt.Sprintf("planner returned empty plan at cycle %d", replan), IsError: true}
+		}
+		log.Debug().
+			Int("replan_cycle", replan).
+			Int("plan_chars", len(plan)).
+			Msg("orchestrate_agents: plan generated")
+
+		fmt.Fprintf(&sb, "\nReplan cycle %d plan\n%s\n", replan, plan)
+
+		currentSpec := goal + "\n\nExecution plan:\n" + plan
+		for round := 1; round <= maxRounds; round++ {
+			if err := ctx.Err(); err != nil {
+				return Result{Title: "Planner-generator-evaluator orchestration", Output: fmt.Sprintf("cancelled at cycle %d round %d: %v", replan, round, err), IsError: true}
+			}
+			log.Debug().
+				Int("replan_cycle", replan).
+				Int("round", round).
+				Int("max_rounds", maxRounds).
+				Msg("orchestrate_agents: planner_generator_evaluator round started")
+
+			genPrompt := currentSpec
+			if bestCandidate != "" {
+				genPrompt += "\n\nPrevious draft:\n" + bestCandidate
+			}
+			candidate, err := sendMessageFn(ctx, generator.Worker, genPrompt)
+			if err != nil {
+				log.Debug().
+					Int("replan_cycle", replan).
+					Int("round", round).
+					Str("worker", generator.Worker).
+					Err(err).
+					Msg("orchestrate_agents: planner_generator_evaluator generator failed")
+				return Result{Title: "Planner-generator-evaluator orchestration", Output: fmt.Sprintf("generator failed at cycle %d round %d: %v", replan, round, err), IsError: true}
+			}
+			candidate = strings.TrimSpace(candidate)
+			if candidate == "" {
+				log.Debug().
+					Int("replan_cycle", replan).
+					Int("round", round).
+					Str("worker", generator.Worker).
+					Msg("orchestrate_agents: planner_generator_evaluator generator returned empty output")
+				return Result{Title: "Planner-generator-evaluator orchestration", Output: fmt.Sprintf("generator returned empty output at cycle %d round %d", replan, round), IsError: true}
+			}
+			log.Debug().
+				Int("replan_cycle", replan).
+				Int("round", round).
+				Int("candidate_chars", len(candidate)).
+				Msg("orchestrate_agents: planner_generator_evaluator candidate produced")
+
+			evalPrompt := "Evaluate the candidate against the acceptance criteria. " +
+				"Start your answer with either PASS or FAIL on the first token. " +
+				"If FAIL, provide concise actionable fixes tied to the criteria.\n\nAcceptance criteria:\n" + acceptanceCriteria +
+				"\n\nCandidate:\n" + candidate
+			assessment, err := sendMessageFn(ctx, evaluator.Worker, evalPrompt)
+			if err != nil {
+				log.Debug().
+					Int("replan_cycle", replan).
+					Int("round", round).
+					Str("worker", evaluator.Worker).
+					Err(err).
+					Msg("orchestrate_agents: planner_generator_evaluator evaluator failed")
+				return Result{Title: "Planner-generator-evaluator orchestration", Output: fmt.Sprintf("evaluator failed at cycle %d round %d: %v", replan, round, err), IsError: true}
+			}
+			assessment = strings.TrimSpace(assessment)
+
+			fmt.Fprintf(&sb, "\nCycle %d round %d candidate\n%s\n\nCycle %d round %d evaluation\n%s\n", replan, round, candidate, replan, round, assessment)
+			bestCandidate = candidate
+
+			normalizedAssessment := strings.ToUpper(strings.TrimSpace(assessment))
+			if strings.HasPrefix(normalizedAssessment, "PASS") {
+				log.Debug().
+					Int("replan_cycle", replan).
+					Int("round", round).
+					Msg("orchestrate_agents: planner_generator_evaluator converged")
+				fmt.Fprintf(&sb, "\nConverged: evaluator accepted output in cycle %d round %d.\n", replan, round)
+				return Result{Title: "Planner-generator-evaluator orchestration", Output: strings.TrimSpace(sb.String())}
+			}
+			log.Debug().
+				Int("replan_cycle", replan).
+				Int("round", round).
+				Int("assessment_chars", len(assessment)).
+				Msg("orchestrate_agents: planner_generator_evaluator feedback captured")
+
+			lastFeedback = assessment
+			currentSpec = goal + "\n\nExecution plan:\n" + plan + "\n\nEvaluator feedback to address:\n" + assessment
+		}
+	}
+
+	log.Debug().
+		Int("max_replans", maxReplans).
+		Msg("orchestrate_agents: planner_generator_evaluator reached max replans")
+	fmt.Fprintf(&sb, "\nReached max replans (%d) without PASS. Returning best candidate from final cycle.\n", maxReplans)
+	return Result{Title: "Planner-generator-evaluator orchestration", Output: strings.TrimSpace(sb.String())}
+}
+
+func runInitializerCoder(
+	ctx context.Context,
+	sendMessageFn func(context.Context, string, string) (string, error),
+	tasks []struct {
+		Worker string `json:"worker"`
+		Prompt string `json:"prompt"`
+	},
+) Result {
+	if len(tasks) < 2 {
+		return Result{Output: "error: initializer_coder requires at least two tasks: initializer and one or more coders", IsError: true}
+	}
+
+	initializer := tasks[0]
+	coders := tasks[1:]
+
+	var sb strings.Builder
+	sb.WriteString("Pattern: initializer_coder\n")
+
+	if err := ctx.Err(); err != nil {
+		return Result{Title: "Initializer-coder orchestration", Output: "cancelled before start: " + err.Error(), IsError: true}
+	}
+
+	log.Debug().
+		Str("initializer", initializer.Worker).
+		Int("coders", len(coders)).
+		Msg("orchestrate_agents: initializer_coder starting")
+
+	plan, err := sendMessageFn(ctx, initializer.Worker, initializer.Prompt)
+	if err != nil {
+		return Result{Title: "Initializer-coder orchestration", Output: fmt.Sprintf("initializer (%s) failed: %v", initializer.Worker, err), IsError: true}
+	}
+	plan = strings.TrimSpace(plan)
+	if plan == "" {
+		return Result{Title: "Initializer-coder orchestration", Output: "initializer returned empty plan", IsError: true}
+	}
+
+	log.Debug().
+		Int("plan_chars", len(plan)).
+		Msg("orchestrate_agents: initializer_coder plan produced")
+
+	fmt.Fprintf(&sb, "\nInitializer (%s)\n%s\n", initializer.Worker, plan)
+
+	var progress strings.Builder
+	hasErr := false
+	for i, coder := range coders {
+		if err := ctx.Err(); err != nil {
+			return Result{Title: "Initializer-coder orchestration", Output: sb.String() + "\ncancelled at coder " + fmt.Sprint(i+1) + ": " + err.Error(), IsError: true}
+		}
+
+		log.Debug().
+			Int("coder", i+1).
+			Str("worker", coder.Worker).
+			Msg("orchestrate_agents: initializer_coder running coder")
+
+		coderPrompt := coder.Prompt + "\n\nInitializer plan:\n" + plan
+		if progress.Len() > 0 {
+			coderPrompt += "\n\nCompleted work so far:\n" + progress.String()
+		}
+
+		resp, err := sendMessageFn(ctx, coder.Worker, coderPrompt)
+		if err != nil {
+			hasErr = true
+			fmt.Fprintf(&sb, "\nCoder %d (%s)\nerror: %v\n", i+1, coder.Worker, err)
+			log.Debug().
+				Int("coder", i+1).
+				Str("worker", coder.Worker).
+				Err(err).
+				Msg("orchestrate_agents: initializer_coder coder failed")
+			continue
+		}
+		resp = strings.TrimSpace(resp)
+		fmt.Fprintf(&sb, "\nCoder %d (%s)\n%s\n", i+1, coder.Worker, resp)
+		fmt.Fprintf(&progress, "- %s: %s\n", coder.Worker, truncateTo(resp, 200))
+
+		log.Debug().
+			Int("coder", i+1).
+			Str("worker", coder.Worker).
+			Int("resp_chars", len(resp)).
+			Msg("orchestrate_agents: initializer_coder coder completed")
+	}
+
+	return Result{Title: "Initializer-coder orchestration", Output: strings.TrimSpace(sb.String()), IsError: hasErr}
 }
