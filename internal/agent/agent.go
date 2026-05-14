@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog/log"
 
@@ -142,9 +143,15 @@ func (a *Agent) Run(ctx context.Context, sessionID string, prompt string) (*RunR
 			}, nil
 		}
 
-		for _, tc := range toolCalls {
-			log.Debug().Str("tool", tc.Name).Int("step", step).Msg("agent: executing tool call")
+		toolNames := make([]string, len(toolCalls))
+		for i, tc := range toolCalls {
+			toolNames[i] = tc.Name
 		}
+		log.Debug().
+			Int("step", step).
+			Int("batch_size", len(toolCalls)).
+			Strs("tools", toolNames).
+			Msg("agent: executing tool call batch")
 
 		toolCallSignatures = append(toolCallSignatures, toolCallBatchSignature(toolCalls))
 		if len(toolCallSignatures) > stuckToolCallWindow {
@@ -154,13 +161,20 @@ func (a *Agent) Run(ctx context.Context, sessionID string, prompt string) (*RunR
 			return nil, errors.New("agent detected repeated identical tool calls and aborted")
 		}
 
+		batchStart := time.Now()
 		toolResults := a.registry.ExecuteCalls(ctx, sessionID, toolCalls)
+		batchElapsed := time.Since(batchStart)
+
 		allErrors := len(toolResults) > 0
+		successCount, failCount := 0, 0
 		toolResultParts := make([]ContentBlock, 0, len(toolResults))
 		for _, r := range toolResults {
 			isErr := r.IsError
-			if !r.IsError {
+			if r.IsError {
+				failCount++
+			} else {
 				allErrors = false
+				successCount++
 			}
 			safeContent := sanitizeToolResultForModel(r.ToolName, r.Content, r.IsError)
 			toolResultParts = append(toolResultParts, ContentBlock{
@@ -171,7 +185,14 @@ func (a *Agent) Run(ctx context.Context, sessionID string, prompt string) (*RunR
 				IsError:   &isErr,
 			})
 		}
-		logToolErrors(toolResults)
+		log.Debug().
+			Int("step", step).
+			Dur("batch_duration", batchElapsed).
+			Int("succeeded", successCount).
+			Int("failed", failCount).
+			Msg("agent: tool call batch complete")
+
+		logToolResults(toolResults)
 		if allErrors {
 			consecutiveAllErrorSteps++
 			log.Warn().
@@ -278,20 +299,33 @@ func (a *Agent) Stream(ctx context.Context, sessionID string, prompt string) (<-
 				return
 			}
 
-			for _, tc := range toolCalls {
-				log.Debug().Str("tool", tc.Name).Int("step", step).Msg("agent: executing tool call")
+			toolNames := make([]string, len(toolCalls))
+			for i, tc := range toolCalls {
+				toolNames[i] = tc.Name
 				events <- Event{Type: EventToolCall, Tool: tc.Name, Content: formatToolCallPayload(tc)}
 			}
+			log.Debug().
+				Int("step", step).
+				Int("batch_size", len(toolCalls)).
+				Strs("tools", toolNames).
+				Msg("agent: executing tool call batch")
 
+			batchStart := time.Now()
 			toolResults := a.registry.ExecuteCalls(ctx, sessionID, toolCalls)
+			batchElapsed := time.Since(batchStart)
+
 			allErrors := len(toolResults) > 0
+			successCount, failCount := 0, 0
 
 			toolResultParts := make([]ContentBlock, 0, len(toolResults))
 			for _, r := range toolResults {
 				events <- Event{Type: EventToolResult, Tool: r.ToolName, Content: r.Content}
 				isErr := r.IsError
-				if !r.IsError {
+				if r.IsError {
+					failCount++
+				} else {
 					allErrors = false
+					successCount++
 				}
 				safeContent := sanitizeToolResultForModel(r.ToolName, r.Content, r.IsError)
 				toolResultParts = append(toolResultParts, ContentBlock{
@@ -302,7 +336,14 @@ func (a *Agent) Stream(ctx context.Context, sessionID string, prompt string) (<-
 					IsError:   &isErr,
 				})
 			}
-			logToolErrors(toolResults)
+			log.Debug().
+				Int("step", step).
+				Dur("batch_duration", batchElapsed).
+				Int("succeeded", successCount).
+				Int("failed", failCount).
+				Msg("agent: tool call batch complete")
+
+			logToolResults(toolResults)
 			if allErrors {
 				consecutiveAllErrorSteps++
 				log.Warn().
@@ -587,26 +628,32 @@ func formatToolCallPayload(call tools.ToolCall) string {
 	return string(encoded)
 }
 
-// logToolErrors logs deduplicated tool call errors at debug level.
-func logToolErrors(results []tools.ToolCallResult) {
-	type key struct{ tool, err string }
-	counts := make(map[key]int)
-	var order []key
+// logToolResults logs per-tool results at debug level: successes with result
+// size, and deduplicated errors with content.
+func logToolResults(results []tools.ToolCallResult) {
+	type errKey struct{ tool, err string }
+	errCounts := make(map[errKey]int)
+	var errOrder []errKey
 	for _, r := range results {
-		if !r.IsError {
-			continue
+		if r.IsError {
+			k := errKey{r.ToolName, r.Content}
+			if errCounts[k] == 0 {
+				errOrder = append(errOrder, k)
+			}
+			errCounts[k]++
+		} else {
+			log.Debug().
+				Str("tool", r.ToolName).
+				Str("call_id", r.ToolCallID).
+				Int("result_len", len(r.Content)).
+				Msg("agent: tool call succeeded")
 		}
-		k := key{r.ToolName, r.Content}
-		if counts[k] == 0 {
-			order = append(order, k)
-		}
-		counts[k]++
 	}
-	for _, k := range order {
+	for _, k := range errOrder {
 		log.Debug().
 			Str("tool", k.tool).
 			Str("error", k.err).
-			Int("count", counts[k]).
+			Int("count", errCounts[k]).
 			Msg("agent: tool call error")
 	}
 }

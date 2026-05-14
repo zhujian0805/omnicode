@@ -13,6 +13,9 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
+
+	"github.com/rs/zerolog/log"
 
 	"omnicode/internal/specdriven"
 )
@@ -325,11 +328,16 @@ func (r *Registry) ExecuteCalls(ctx context.Context, sessionID string, calls []T
 		go func(idx int, tc ToolCall) {
 			defer wg.Done()
 			defer func() {
-				if r := recover(); r != nil {
+				if rv := recover(); rv != nil {
+					log.Error().
+						Str("tool", tc.Name).
+						Str("call_id", tc.ID).
+						Str("panic", fmt.Sprintf("%v", rv)).
+						Msg("tool: panicked during execution")
 					results[idx] = ToolCallResult{
 						ToolCallID: tc.ID,
 						ToolName:   tc.Name,
-						Content:    fmt.Sprintf("error: tool panicked: %v", r),
+						Content:    fmt.Sprintf("error: tool panicked: %v", rv),
 						IsError:    true,
 					}
 				}
@@ -342,6 +350,11 @@ func (r *Registry) ExecuteCalls(ctx context.Context, sessionID string, calls []T
 				if suggestion != "" {
 					msg += fmt.Sprintf("; did you mean %q?", suggestion)
 				}
+				log.Debug().
+					Str("requested", tc.Name).
+					Str("suggestion", suggestion).
+					Str("call_id", tc.ID).
+					Msg("tool: unknown tool requested")
 				results[idx] = ToolCallResult{
 					ToolCallID: tc.ID,
 					ToolName:   tc.Name,
@@ -351,6 +364,21 @@ func (r *Registry) ExecuteCalls(ctx context.Context, sessionID string, calls []T
 				return
 			}
 
+			resolvedName := tool.Name()
+			if resolvedName != tc.Name {
+				log.Debug().
+					Str("requested", tc.Name).
+					Str("resolved", resolvedName).
+					Str("call_id", tc.ID).
+					Msg("tool: resolved alias")
+			}
+
+			log.Debug().
+				Str("tool", resolvedName).
+				Str("call_id", tc.ID).
+				Str("args", truncateForLog(formatArgs(tc.Arguments), 200)).
+				Msg("tool: executing")
+
 			if checker != nil {
 				approved, err := checker(ctx, PermissionRequest{
 					SessionID: sessionID,
@@ -358,6 +386,11 @@ func (r *Registry) ExecuteCalls(ctx context.Context, sessionID string, calls []T
 					Arguments: tc.Arguments,
 				})
 				if err != nil {
+					log.Debug().
+						Str("tool", resolvedName).
+						Str("call_id", tc.ID).
+						Str("error", err.Error()).
+						Msg("tool: permission check failed")
 					results[idx] = ToolCallResult{
 						ToolCallID: tc.ID,
 						ToolName:   tc.Name,
@@ -367,6 +400,10 @@ func (r *Registry) ExecuteCalls(ctx context.Context, sessionID string, calls []T
 					return
 				}
 				if !approved {
+					log.Debug().
+						Str("tool", resolvedName).
+						Str("call_id", tc.ID).
+						Msg("tool: execution denied by user")
 					results[idx] = ToolCallResult{
 						ToolCallID: tc.ID,
 						ToolName:   tc.Name,
@@ -379,6 +416,11 @@ func (r *Registry) ExecuteCalls(ctx context.Context, sessionID string, calls []T
 
 			inputJSON, err := json.Marshal(tc.Arguments)
 			if err != nil {
+				log.Debug().
+					Str("tool", resolvedName).
+					Str("call_id", tc.ID).
+					Str("error", err.Error()).
+					Msg("tool: failed to marshal arguments")
 				results[idx] = ToolCallResult{
 					ToolCallID: tc.ID,
 					ToolName:   tc.Name,
@@ -402,7 +444,21 @@ func (r *Registry) ExecuteCalls(ctx context.Context, sessionID string, calls []T
 				Registry:      r,
 				SendMessageFn: r.SendMessageFn,
 			}
+			start := time.Now()
 			result := tool.Execute(ctx, callCtx, inputJSON)
+			elapsed := time.Since(start)
+
+			status := "success"
+			if result.IsError {
+				status = "failed"
+			}
+			log.Debug().
+				Str("tool", resolvedName).
+				Str("call_id", tc.ID).
+				Str("status", status).
+				Dur("duration", elapsed).
+				Int("result_len", len(result.Output)).
+				Msg("tool: execution complete")
 
 			results[idx] = ToolCallResult{
 				ToolCallID: tc.ID,
@@ -415,4 +471,19 @@ func (r *Registry) ExecuteCalls(ctx context.Context, sessionID string, calls []T
 
 	wg.Wait()
 	return results
+}
+
+func formatArgs(args map[string]any) string {
+	b, err := json.Marshal(args)
+	if err != nil {
+		return "{}"
+	}
+	return string(b)
+}
+
+func truncateForLog(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }
