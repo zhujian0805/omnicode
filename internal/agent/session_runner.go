@@ -136,15 +136,28 @@ func trimForLog(s string, max int) string {
 
 func selectDispatch(c Client, model, _, apiShape string) DispatchFn {
 	var base DispatchFn
-	switch normalizeAPIShape(apiShape) {
-	case "openai":
-		base = OpenAISDKDispatch(omniLLMAPIKey(c), omniLLMOpenAIBaseURL(c), model)
-	default:
+	if isClaudeModel(model) {
+		// Claude models always use the Anthropic SDK dispatch regardless of apiShape.
+		log.Info().Str("model", model).Str("api_shape", apiShape).Str("dispatch", "anthropic-sdk").Str("reason", "claude model detected").Str("base_url", omniLLMAnthropicBaseURL(c)).Msg("dispatch: routing to Anthropic SDK")
 		base = modelOverrideDispatch(AnthropicSDKDispatch(omniLLMAPIKey(c), omniLLMAnthropicBaseURL(c)), model)
+	} else {
+		switch normalizeAPIShape(apiShape) {
+		case "openai":
+			log.Info().Str("model", model).Str("api_shape", apiShape).Str("dispatch", "openai-sdk").Str("base_url", omniLLMOpenAIBaseURL(c)).Msg("dispatch: routing to OpenAI SDK")
+			base = OpenAISDKDispatch(omniLLMAPIKey(c), omniLLMOpenAIBaseURL(c), model)
+		default:
+			log.Info().Str("model", model).Str("api_shape", apiShape).Str("dispatch", "anthropic-sdk").Str("reason", "default fallback").Str("base_url", omniLLMAnthropicBaseURL(c)).Msg("dispatch: routing to Anthropic SDK")
+			base = modelOverrideDispatch(AnthropicSDKDispatch(omniLLMAPIKey(c), omniLLMAnthropicBaseURL(c)), model)
+		}
 	}
 
 	// Add transient retry behavior for interactive agent turns.
 	return retryDispatch(base, 3, 500*time.Millisecond, 8*time.Second)
+}
+
+// isClaudeModel returns true if the model name indicates an Anthropic Claude model.
+func isClaudeModel(model string) bool {
+	return strings.Contains(strings.ToLower(strings.TrimSpace(model)), "claude")
 }
 
 func modelOverrideDispatch(base DispatchFn, model string) DispatchFn {
