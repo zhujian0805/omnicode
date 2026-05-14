@@ -18,7 +18,7 @@ var allSkills = map[string]string{
 	SkillPlan:         "Plan mode: enter_plan_mode, exit_plan_mode",
 	SkillWorktree:     "Git worktrees: enter_worktree, exit_worktree",
 	SkillScheduler:    "Scheduling automation: schedule_cron, schedule_heartbeat, trigger_event",
-	SkillAgent:        "Multi-agent: send_message, agent, batch",
+	SkillAgent:        "Multi-agent: send_message, agent, batch, orchestrate_agents",
 	SkillUtilityExtra: "Extra utilities: calculator, sleep, lsp, tool_search, config",
 	SkillSpec:         "Spec-driven development: speckit_constitution, speckit_specify, speckit_clarify, speckit_plan, speckit_tasks, speckit_analyze, speckit_implement, speckit_checklist, speckit_lifecycle_status, speckit_complete, speckit_archive, openspec_propose, openspec_explore, openspec_new, openspec_continue, openspec_ff, openspec_apply, openspec_verify, openspec_sync, openspec_archive, openspec_bulk_archive, openspec_onboard",
 }
@@ -104,5 +104,80 @@ func (t *loadSkillTool) Execute(_ context.Context, call Context, input json.RawM
 
 	return Result{
 		Output: fmt.Sprintf("skill %q activated: %s", p.Skill, desc),
+	}
+}
+
+// ─── unload_skill ──────────────────────────────────────────────────────────
+
+type unloadSkillTool struct{}
+
+func UnloadSkill() Tool { return &unloadSkillTool{} }
+
+func (t *unloadSkillTool) Name() string { return "unload_skill" }
+
+func (t *unloadSkillTool) Description() string {
+	return "Deactivate a previously loaded skill to free context budget. " +
+		"The skill's tools will no longer appear in tool definitions until re-activated."
+}
+
+func (t *unloadSkillTool) InputSchema() map[string]any {
+	skillNames := make([]string, 0, len(allSkills))
+	for k := range allSkills {
+		skillNames = append(skillNames, k)
+	}
+	sort.Strings(skillNames)
+
+	enumValues := make([]any, len(skillNames))
+	for i, n := range skillNames {
+		enumValues[i] = n
+	}
+
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"skill": map[string]any{
+				"type":        "string",
+				"description": "The skill to deactivate.",
+				"enum":        enumValues,
+			},
+		},
+		"required": []string{"skill"},
+	}
+}
+
+func (t *unloadSkillTool) Execute(_ context.Context, call Context, input json.RawMessage) Result {
+	var p struct {
+		Skill string `json:"skill"`
+	}
+	if err := json.Unmarshal(input, &p); err != nil {
+		return Result{Output: "error: " + err.Error(), IsError: true}
+	}
+	p.Skill = strings.TrimSpace(p.Skill)
+	if p.Skill == "" {
+		return Result{Output: "error: skill name is required", IsError: true}
+	}
+
+	if _, known := allSkills[p.Skill]; !known {
+		valid := make([]string, 0, len(allSkills))
+		for k := range allSkills {
+			valid = append(valid, k)
+		}
+		sort.Strings(valid)
+		return Result{
+			Output:  fmt.Sprintf("unknown skill %q; valid skills: %s", p.Skill, strings.Join(valid, ", ")),
+			IsError: true,
+		}
+	}
+
+	if call.Registry == nil {
+		return Result{Output: "error: registry not available in tool context", IsError: true}
+	}
+	if !call.Registry.IsSkillActive(p.Skill) {
+		return Result{Output: fmt.Sprintf("skill %q is not currently active", p.Skill)}
+	}
+	call.Registry.DeactivateSkill(p.Skill)
+
+	return Result{
+		Output: fmt.Sprintf("skill %q deactivated; its tools are no longer available", p.Skill),
 	}
 }

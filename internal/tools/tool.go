@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 
 	"omnicode/internal/specdriven"
@@ -150,6 +151,13 @@ func (r *Registry) ActivateSkill(skillName string) {
 	r.activeSkills[skillName] = true
 }
 
+// DeactivateSkill disables a skill so its tools no longer appear in Definitions().
+func (r *Registry) DeactivateSkill(skillName string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.activeSkills, skillName)
+}
+
 // IsSkillActive reports whether a skill is currently active.
 func (r *Registry) IsSkillActive(skillName string) bool {
 	r.mu.RLock()
@@ -176,11 +184,53 @@ func (r *Registry) ToolSkill(toolName string) string {
 	return r.toolSkill[toolName]
 }
 
+// toolAliases maps common model-hallucinated tool names to the correct names.
+var toolAliases = map[string]string{
+	"read_file":  "read",
+	"write_file": "write",
+	"edit_file":  "edit",
+	"list_files": "ls",
+	"search":     "grep",
+	"find_files": "glob",
+	"run":        "bash",
+	"shell":      "bash",
+	"execute":    "bash",
+}
+
 // Get returns the tool with the given name, or nil.
+// It resolves common model-hallucinated aliases before lookup.
 func (r *Registry) Get(name string) Tool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return r.tools[name]
+	if t := r.tools[name]; t != nil {
+		return t
+	}
+	if canonical, ok := toolAliases[name]; ok {
+		return r.tools[canonical]
+	}
+	return nil
+}
+
+// suggestToolName returns the registered tool name most similar to the given
+// unknown name, or "" if no reasonable match is found.
+func (r *Registry) suggestToolName(name string) string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	best := ""
+	bestScore := 0
+	nameLower := strings.ToLower(name)
+	for registered := range r.tools {
+		regLower := strings.ToLower(registered)
+		score := 0
+		if strings.Contains(nameLower, regLower) || strings.Contains(regLower, nameLower) {
+			score = len(regLower)
+		}
+		if score > bestScore {
+			bestScore = score
+			best = registered
+		}
+	}
+	return best
 }
 
 // SetPermissionChecker configures an approval hook for tool execution.
@@ -287,10 +337,15 @@ func (r *Registry) ExecuteCalls(ctx context.Context, sessionID string, calls []T
 
 			tool := r.Get(tc.Name)
 			if tool == nil {
+				suggestion := r.suggestToolName(tc.Name)
+				msg := "error: unknown tool " + tc.Name
+				if suggestion != "" {
+					msg += fmt.Sprintf("; did you mean %q?", suggestion)
+				}
 				results[idx] = ToolCallResult{
 					ToolCallID: tc.ID,
 					ToolName:   tc.Name,
-					Content:    "error: unknown tool " + tc.Name,
+					Content:    msg,
 					IsError:    true,
 				}
 				return

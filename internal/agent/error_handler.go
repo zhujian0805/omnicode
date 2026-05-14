@@ -14,6 +14,8 @@ type ErrorClass string
 const (
 	ErrorClassTransient ErrorClass = "transient"
 	ErrorClassPermanent ErrorClass = "permanent"
+	ErrorClassModel     ErrorClass = "model"
+	ErrorClassResource  ErrorClass = "resource"
 )
 
 func classifyDispatchError(err error) ErrorClass {
@@ -26,6 +28,28 @@ func classifyDispatchError(err error) ErrorClass {
 	}
 
 	msg := strings.ToLower(err.Error())
+
+	resourceSignals := []string{
+		"out of memory", "oom", "disk full", "no space left",
+		"memory limit", "resource exhausted",
+	}
+	for _, signal := range resourceSignals {
+		if strings.Contains(msg, signal) {
+			return ErrorClassResource
+		}
+	}
+
+	modelSignals := []string{
+		"invalid request", "malformed", "context length exceeded",
+		"max tokens", "content policy", "invalid_api_key",
+		"invalid tool", "unknown function", "400",
+	}
+	for _, signal := range modelSignals {
+		if strings.Contains(msg, signal) {
+			return ErrorClassModel
+		}
+	}
+
 	transientSignals := []string{
 		"timeout", "timed out", "connection", "rate limit", "429", "502", "503", "504",
 		"temporary", "retry", "eof", "reset by peer", "unavailable",

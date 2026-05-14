@@ -49,6 +49,8 @@ const (
 
 const forcedReadContinuationPrompt = "Continue by calling the read tool on one representative source file before finalizing your answer."
 
+const validationContinuationPrompt = "Before finishing: review your work against the user's original request. If any part is incomplete, incorrect, or missing, continue by using the appropriate tools. If everything is fully addressed, provide your final response."
+
 // NewAgent creates a new Agent with the given configuration.
 // If maxSteps <= 0, defaults to 10.
 func NewAgent(registry *tools.Registry, memory Memory, maxSteps int, dispatch DispatchFn) *Agent {
@@ -87,6 +89,7 @@ func (a *Agent) Run(ctx context.Context, sessionID string, prompt string) (*RunR
 	var finalOutput string
 	toolCallSignatures := make([]string, 0, stuckToolCallWindow)
 	consecutiveAllErrorSteps := 0
+	validationDone := false
 
 	for step := startStep; step < a.maxSteps; step++ {
 		log.Debug().Int("step", step).Int("max_steps", a.maxSteps).Msg("agent: starting step")
@@ -123,6 +126,12 @@ func (a *Agent) Run(ctx context.Context, sessionID string, prompt string) (*RunR
 				a.memory.Append(toUserContinuationMessage(forcedReadContinuationPrompt))
 				continue
 			}
+			if !validationDone && step > 0 && step+1 < a.maxSteps {
+				validationDone = true
+				log.Debug().Int("step", step).Msg("agent: injecting completion validation")
+				a.memory.Append(toUserContinuationMessage(validationContinuationPrompt))
+				continue
+			}
 			log.Debug().Int("step", step).Msg("agent: no tool calls, finishing")
 			finalOutput = extractTextContent(response.Content)
 			clearCheckpoint(sessionID)
@@ -153,7 +162,6 @@ func (a *Agent) Run(ctx context.Context, sessionID string, prompt string) (*RunR
 			if !r.IsError {
 				allErrors = false
 			}
-			log.Debug().Str("tool", r.ToolName).Bool("is_error", r.IsError).Msg("agent: tool result")
 			safeContent := sanitizeToolResultForModel(r.ToolName, r.Content, r.IsError)
 			toolResultParts = append(toolResultParts, ContentBlock{
 				Type:      "tool_result",
@@ -163,18 +171,13 @@ func (a *Agent) Run(ctx context.Context, sessionID string, prompt string) (*RunR
 				IsError:   &isErr,
 			})
 		}
+		logToolErrors(toolResults)
 		if allErrors {
 			consecutiveAllErrorSteps++
 			log.Warn().
 				Int("consecutive_error_steps", consecutiveAllErrorSteps).
 				Int("max_allowed", maxConsecutiveAllErrorSteps).
 				Msg("agent: all tool calls in step returned errors")
-			for _, r := range toolResults {
-				log.Debug().
-					Str("tool", r.ToolName).
-					Str("error", r.Content).
-					Msg("agent: failing tool call detail")
-			}
 			if consecutiveAllErrorSteps >= maxConsecutiveAllErrorSteps {
 				log.Error().Msg("agent: aborting after consecutive tool-error steps")
 				return nil, errors.New("agent aborted after consecutive tool-error steps")
@@ -210,6 +213,7 @@ func (a *Agent) Stream(ctx context.Context, sessionID string, prompt string) (<-
 
 		toolCallSignatures := make([]string, 0, stuckToolCallWindow)
 		consecutiveAllErrorSteps := 0
+		validationDone := false
 
 		for step := startStep; step < a.maxSteps; step++ {
 			log.Debug().Int("step", step).Int("max_steps", a.maxSteps).Msg("agent: starting step")
@@ -253,6 +257,12 @@ func (a *Agent) Stream(ctx context.Context, sessionID string, prompt string) (<-
 					a.memory.Append(toUserContinuationMessage(forcedReadContinuationPrompt))
 					continue
 				}
+				if !validationDone && step > 0 && step+1 < a.maxSteps {
+					validationDone = true
+					log.Debug().Int("step", step).Msg("agent: injecting completion validation")
+					a.memory.Append(toUserContinuationMessage(validationContinuationPrompt))
+					continue
+				}
 				log.Debug().Int("step", step).Msg("agent: no tool calls, finishing")
 				clearCheckpoint(sessionID)
 				events <- Event{Type: EventDone}
@@ -283,7 +293,6 @@ func (a *Agent) Stream(ctx context.Context, sessionID string, prompt string) (<-
 				if !r.IsError {
 					allErrors = false
 				}
-				log.Debug().Str("tool", r.ToolName).Bool("is_error", r.IsError).Msg("agent: tool result")
 				safeContent := sanitizeToolResultForModel(r.ToolName, r.Content, r.IsError)
 				toolResultParts = append(toolResultParts, ContentBlock{
 					Type:      "tool_result",
@@ -293,18 +302,13 @@ func (a *Agent) Stream(ctx context.Context, sessionID string, prompt string) (<-
 					IsError:   &isErr,
 				})
 			}
+			logToolErrors(toolResults)
 			if allErrors {
 				consecutiveAllErrorSteps++
 				log.Warn().
 					Int("consecutive_error_steps", consecutiveAllErrorSteps).
 					Int("max_allowed", maxConsecutiveAllErrorSteps).
 					Msg("agent: all tool calls in step returned errors")
-				for _, r := range toolResults {
-					log.Debug().
-						Str("tool", r.ToolName).
-						Str("error", r.Content).
-						Msg("agent: failing tool call detail")
-				}
 				if consecutiveAllErrorSteps >= maxConsecutiveAllErrorSteps {
 					log.Error().Msg("agent: aborting after consecutive tool-error steps")
 					events <- Event{Type: EventError, Content: "agent aborted after consecutive tool-error steps"}
@@ -581,6 +585,30 @@ func formatToolCallPayload(call tools.ToolCall) string {
 		return call.ID
 	}
 	return string(encoded)
+}
+
+// logToolErrors logs deduplicated tool call errors at debug level.
+func logToolErrors(results []tools.ToolCallResult) {
+	type key struct{ tool, err string }
+	counts := make(map[key]int)
+	var order []key
+	for _, r := range results {
+		if !r.IsError {
+			continue
+		}
+		k := key{r.ToolName, r.Content}
+		if counts[k] == 0 {
+			order = append(order, k)
+		}
+		counts[k]++
+	}
+	for _, k := range order {
+		log.Debug().
+			Str("tool", k.tool).
+			Str("error", k.err).
+			Int("count", counts[k]).
+			Msg("agent: tool call error")
+	}
 }
 
 func extractTextContent(content []ContentBlock) string {

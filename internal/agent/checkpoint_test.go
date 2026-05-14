@@ -180,9 +180,10 @@ func TestRunResumesFromCheckpoint(t *testing.T) {
 		t.Error("checkpoint should be cleared after successful run")
 	}
 
-	// dispatch should have been called exactly once — resumed from step 1.
-	if dispatched != 1 {
-		t.Errorf("dispatch calls: want 1, got %d", dispatched)
+	// dispatch should have been called twice — resumed from step 1, then
+	// validation prompt triggers a second dispatch.
+	if dispatched != 2 {
+		t.Errorf("dispatch calls: want 2, got %d", dispatched)
 	}
 }
 
