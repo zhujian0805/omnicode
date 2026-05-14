@@ -8,11 +8,17 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"os"
+	"sort"
+	"strconv"
 	"strings"
+	"time"
 
 	anthropic "github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
+	"github.com/anthropics/anthropic-sdk-go/packages/ssestream"
 )
 
 // AnthropicSDKDispatch returns a DispatchFn that calls the Anthropic Messages
@@ -30,6 +36,7 @@ func AnthropicSDKDispatch(apiKey, baseURL string) DispatchFn {
 	if baseURL != "" {
 		opts = append(opts, option.WithBaseURL(baseURL))
 	}
+	opts = append(opts, anthropicSDKClientOptionsFromEnv()...)
 	client := anthropic.NewClient(opts...)
 
 	return func(ctx context.Context, req *MessagesRequest) (<-chan *MessagesResponse, error) {
@@ -38,9 +45,23 @@ func AnthropicSDKDispatch(apiKey, baseURL string) DispatchFn {
 			return nil, fmt.Errorf("anthropic-sdk: build params: %w", err)
 		}
 
-		msg, err := client.Messages.New(ctx, params)
+		requestOpts := anthropicSDKRequestOptionsFromEnv()
+		if anthropicSDKStreamingEnabled(req) {
+			stream := client.Messages.NewStreaming(ctx, params, requestOpts...)
+			resp, err := anthropicStreamToResponse(stream)
+			if err != nil {
+				return nil, wrapAnthropicSDKError("messages.new_streaming", err)
+			}
+
+			ch := make(chan *MessagesResponse, 1)
+			ch <- resp
+			close(ch)
+			return ch, nil
+		}
+
+		msg, err := client.Messages.New(ctx, params, requestOpts...)
 		if err != nil {
-			return nil, fmt.Errorf("anthropic-sdk: messages.new: %w", err)
+			return nil, wrapAnthropicSDKError("messages.new", err)
 		}
 
 		resp := anthropicMsgToResponse(msg)
@@ -50,6 +71,189 @@ func AnthropicSDKDispatch(apiKey, baseURL string) DispatchFn {
 		close(ch)
 		return ch, nil
 	}
+}
+
+func anthropicSDKClientOptionsFromEnv() []option.RequestOption {
+	maxRetries, ok := lookupIntEnv("ANTHROPIC_SDK_MAX_RETRIES")
+	if !ok {
+		return nil
+	}
+	return []option.RequestOption{option.WithMaxRetries(maxRetries)}
+}
+
+func anthropicSDKRequestOptionsFromEnv() []option.RequestOption {
+	requestTimeout, ok := lookupDurationMSEnv("ANTHROPIC_SDK_REQUEST_TIMEOUT_MS")
+	if !ok {
+		return nil
+	}
+	return []option.RequestOption{option.WithRequestTimeout(requestTimeout)}
+}
+
+func anthropicSDKStreamingEnabled(req *MessagesRequest) bool {
+	if req != nil && req.Stream {
+		return true
+	}
+	v := strings.ToLower(strings.TrimSpace(os.Getenv("ANTHROPIC_SDK_STREAMING")))
+	switch v {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+func lookupIntEnv(name string) (int, bool) {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return 0, false
+	}
+	v, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, false
+	}
+	if v < 0 {
+		return 0, false
+	}
+	return v, true
+}
+
+func lookupDurationMSEnv(name string) (time.Duration, bool) {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return 0, false
+	}
+	v, err := strconv.Atoi(raw)
+	if err != nil || v <= 0 {
+		return 0, false
+	}
+	return time.Duration(v) * time.Millisecond, true
+}
+
+func wrapAnthropicSDKError(action string, err error) error {
+	var apiErr *anthropic.Error
+	if errors.As(err, &apiErr) {
+		if apiErr.RequestID != "" {
+			return fmt.Errorf("anthropic-sdk: %s (request_id=%s): %w", action, apiErr.RequestID, err)
+		}
+		return fmt.Errorf("anthropic-sdk: %s (status=%d): %w", action, apiErr.StatusCode, err)
+	}
+	return fmt.Errorf("anthropic-sdk: %s: %w", action, err)
+}
+
+func anthropicStreamToResponse(stream *ssestream.Stream[anthropic.MessageStreamEventUnion]) (*MessagesResponse, error) {
+	if stream == nil {
+		return nil, fmt.Errorf("anthropic stream is nil")
+	}
+	defer stream.Close()
+
+	resp := &MessagesResponse{StopReason: StopReasonEndTurn}
+	type streamBlockState struct {
+		block       ContentBlock
+		partialJSON strings.Builder
+	}
+	blocks := map[int]*streamBlockState{}
+	orderedIndexes := map[int]struct{}{}
+
+	for stream.Next() {
+		event := stream.Current()
+		switch ev := event.AsAny().(type) {
+		case anthropic.MessageStartEvent:
+			resp.ID = ev.Message.ID
+			resp.Model = string(ev.Message.Model)
+			resp.Usage = &Usage{
+				InputTokens:  int(ev.Message.Usage.InputTokens),
+				OutputTokens: int(ev.Message.Usage.OutputTokens),
+			}
+		case anthropic.ContentBlockStartEvent:
+			idx := int(ev.Index)
+			blocks[idx] = &streamBlockState{block: anthropicStartBlockToResponseBlock(ev.ContentBlock)}
+			orderedIndexes[idx] = struct{}{}
+		case anthropic.ContentBlockDeltaEvent:
+			idx := int(ev.Index)
+			state, ok := blocks[idx]
+			if !ok {
+				state = &streamBlockState{}
+				blocks[idx] = state
+				orderedIndexes[idx] = struct{}{}
+			}
+			switch delta := ev.Delta.AsAny().(type) {
+			case anthropic.TextDelta:
+				state.block.Text += delta.Text
+			case anthropic.ThinkingDelta:
+				state.block.Thinking += delta.Thinking
+			case anthropic.SignatureDelta:
+				sig := delta.Signature
+				state.block.Signature = &sig
+			case anthropic.InputJSONDelta:
+				state.partialJSON.WriteString(delta.PartialJSON)
+			}
+		case anthropic.MessageDeltaEvent:
+			resp.StopReason = mapAnthropicStopReason(ev.Delta.StopReason)
+			if ev.Delta.StopSequence != "" {
+				stopSequence := ev.Delta.StopSequence
+				resp.StopSequence = &stopSequence
+			}
+			if resp.Usage == nil {
+				resp.Usage = &Usage{}
+			}
+			resp.Usage.OutputTokens = int(ev.Usage.OutputTokens)
+		}
+	}
+
+	if err := stream.Err(); err != nil {
+		return nil, err
+	}
+
+	indexes := make([]int, 0, len(orderedIndexes))
+	for idx := range orderedIndexes {
+		indexes = append(indexes, idx)
+	}
+	sort.Ints(indexes)
+	for _, idx := range indexes {
+		state := blocks[idx]
+		if state == nil {
+			continue
+		}
+		if state.block.Type == "tool_use" && state.partialJSON.Len() > 0 {
+			state.block.Input = decodeToolUseInputJSON(state.partialJSON.String())
+		}
+		if state.block.Type == "" {
+			continue
+		}
+		resp.Content = append(resp.Content, state.block)
+	}
+
+	return resp, nil
+}
+
+func anthropicStartBlockToResponseBlock(block anthropic.ContentBlockStartEventContentBlockUnion) ContentBlock {
+	switch block.Type {
+	case "text":
+		return ContentBlock{Type: "text", Text: block.Text}
+	case "thinking":
+		sig := block.Signature
+		return ContentBlock{Type: "thinking", Thinking: block.Thinking, Signature: &sig}
+	case "tool_use":
+		input, _ := block.Input.(map[string]any)
+		if input == nil {
+			input = map[string]any{}
+		}
+		return ContentBlock{Type: "tool_use", ID: block.ID, Name: block.Name, Input: input}
+	default:
+		return ContentBlock{Type: block.Type}
+	}
+}
+
+func decodeToolUseInputJSON(raw string) map[string]any {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return map[string]any{}
+	}
+	var m map[string]any
+	if err := json.Unmarshal([]byte(raw), &m); err != nil {
+		return map[string]any{}
+	}
+	return m
 }
 
 // ─── conversion helpers ───────────────────────────────────────────────────────
@@ -272,15 +476,11 @@ func anthropicMsgToResponse(msg *anthropic.Message) *MessagesResponse {
 		Model: string(msg.Model),
 	}
 
-	switch msg.StopReason {
-	case anthropic.StopReasonToolUse:
-		resp.StopReason = StopReasonToolUse
-	case anthropic.StopReasonMaxTokens:
-		resp.StopReason = StopReasonMaxTokens
-	case anthropic.StopReasonStopSequence:
-		resp.StopReason = StopReasonStopSequence
-	default:
-		resp.StopReason = StopReasonEndTurn
+	resp.StopReason = mapAnthropicStopReason(msg.StopReason)
+
+	if msg.StopSequence != "" {
+		stopSequence := msg.StopSequence
+		resp.StopSequence = &stopSequence
 	}
 
 	resp.Usage = &Usage{
@@ -299,6 +499,19 @@ func anthropicMsgToResponse(msg *anthropic.Message) *MessagesResponse {
 	}
 
 	return resp
+}
+
+func mapAnthropicStopReason(reason anthropic.StopReason) StopReason {
+	switch reason {
+	case anthropic.StopReasonToolUse:
+		return StopReasonToolUse
+	case anthropic.StopReasonMaxTokens:
+		return StopReasonMaxTokens
+	case anthropic.StopReasonStopSequence:
+		return StopReasonStopSequence
+	default:
+		return StopReasonEndTurn
+	}
 }
 
 func rawMessageToMap(raw json.RawMessage) map[string]any {
