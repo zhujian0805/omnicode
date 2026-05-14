@@ -766,12 +766,13 @@ func TestAgentMatrixMultiTurn(t *testing.T) {
 					history = append(history, HistoryMessage{Role: "assistant", Content: result.Output})
 				}
 
-				// Total proxy calls: turns without tool = 1 call; with tool = 2 calls.
-				// Script: turns 0,2 have tools (2 calls each); turns 1,3 don't (1 call each).
+				// Total proxy calls: turns without tool = 1 call; with tool = 3 calls
+				// (tool step + validation prompt + final answer).
+				// Script: turns 0,2 have tools (3 calls each); turns 1,3 don't (1 call each).
 				wantTotal := 0
 				for _, ex := range conversationScript {
 					if ex.toolCallOnFirstStep {
-						wantTotal += 2
+						wantTotal += 3
 					} else {
 						wantTotal++
 					}
@@ -836,11 +837,11 @@ func TestStreamTurnExecutesProviderQualifiedClaudeToolUse(t *testing.T) {
 	if checkerCalls != 1 {
 		t.Fatalf("permission checker calls = %d, want 1", checkerCalls)
 	}
-	if stub.calls != 2 {
-		t.Fatalf("proxy calls = %d, want 2", stub.calls)
+	if stub.calls != 3 {
+		t.Fatalf("proxy calls = %d, want 3 (tool + validation + final)", stub.calls)
 	}
-	if got := strings.Join(tokens, ""); got != "ok" {
-		t.Fatalf("final token output = %q, want ok", got)
+	if got := strings.Join(tokens, ""); got != "okok" {
+		t.Fatalf("final token output = %q, want okok (validation + final)", got)
 	}
 	if stub.capturedPayload[0]["model"] != model {
 		t.Fatalf("request model = %#v, want %q", stub.capturedPayload[0]["model"], model)

@@ -770,6 +770,41 @@ func TestRegistryGetUnknown(t *testing.T) {
 	}
 }
 
+func TestRegistryGetAlias(t *testing.T) {
+	r := NewRegistry()
+	r.Register(Read())
+	r.Register(Write())
+	r.Register(Bash())
+
+	cases := []struct{ alias, canonical string }{
+		{"read_file", "read"},
+		{"write_file", "write"},
+		{"shell", "bash"},
+	}
+	for _, tc := range cases {
+		got := r.Get(tc.alias)
+		if got == nil {
+			t.Fatalf("Get(%q) returned nil, expected %q", tc.alias, tc.canonical)
+		}
+		if got.Name() != tc.canonical {
+			t.Fatalf("Get(%q) returned %q, expected %q", tc.alias, got.Name(), tc.canonical)
+		}
+	}
+}
+
+func TestRegistrySuggestToolName(t *testing.T) {
+	r := NewRegistry()
+	r.Register(Read())
+	r.Register(Grep())
+
+	if s := r.suggestToolName("reading"); s != "read" {
+		t.Fatalf("expected suggestion %q, got %q", "read", s)
+	}
+	if s := r.suggestToolName("zzzzz"); s != "" {
+		t.Fatalf("expected no suggestion, got %q", s)
+	}
+}
+
 func TestRegistryListReturnsAll(t *testing.T) {
 	r := NewRegistry()
 	r.Register(Bash())
@@ -927,8 +962,8 @@ func TestRegisterCoreToolsCount(t *testing.T) {
 	RegisterCoreTools(m)
 
 	tools := m.Registry().List()
-	// 65 tools as of groups.go, after removing legacy spec_* tools.
-	const wantCount = 63
+	// 64 tools as of groups.go (includes unload_skill).
+	const wantCount = 64
 	if len(tools) != wantCount {
 		names := make([]string, len(tools))
 		for i, t2 := range tools {

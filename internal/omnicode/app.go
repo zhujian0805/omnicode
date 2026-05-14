@@ -19,6 +19,11 @@ func runOneShot(cmd *cobra.Command, prompt string) error {
 		return err
 	}
 
+	// One-shot prompt mode always uses agent mode so that tools are available.
+	if session.Mode == "chat" {
+		session.Mode = "agent"
+	}
+
 	if session.Mode == "agent" {
 		result, err := chat.RunAgentTurn(c, session.ID, session.Model, session.AgentBackend, session.APIShape, prompt, cmd)
 		if err != nil {

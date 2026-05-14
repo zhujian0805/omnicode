@@ -11,7 +11,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
+	"time"
+
+	"github.com/rs/zerolog/log"
 
 	"omnicode/internal/specdriven"
 )
@@ -150,6 +154,13 @@ func (r *Registry) ActivateSkill(skillName string) {
 	r.activeSkills[skillName] = true
 }
 
+// DeactivateSkill disables a skill so its tools no longer appear in Definitions().
+func (r *Registry) DeactivateSkill(skillName string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.activeSkills, skillName)
+}
+
 // IsSkillActive reports whether a skill is currently active.
 func (r *Registry) IsSkillActive(skillName string) bool {
 	r.mu.RLock()
@@ -176,11 +187,53 @@ func (r *Registry) ToolSkill(toolName string) string {
 	return r.toolSkill[toolName]
 }
 
+// toolAliases maps common model-hallucinated tool names to the correct names.
+var toolAliases = map[string]string{
+	"read_file":  "read",
+	"write_file": "write",
+	"edit_file":  "edit",
+	"list_files": "ls",
+	"search":     "grep",
+	"find_files": "glob",
+	"run":        "bash",
+	"shell":      "bash",
+	"execute":    "bash",
+}
+
 // Get returns the tool with the given name, or nil.
+// It resolves common model-hallucinated aliases before lookup.
 func (r *Registry) Get(name string) Tool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return r.tools[name]
+	if t := r.tools[name]; t != nil {
+		return t
+	}
+	if canonical, ok := toolAliases[name]; ok {
+		return r.tools[canonical]
+	}
+	return nil
+}
+
+// suggestToolName returns the registered tool name most similar to the given
+// unknown name, or "" if no reasonable match is found.
+func (r *Registry) suggestToolName(name string) string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	best := ""
+	bestScore := 0
+	nameLower := strings.ToLower(name)
+	for registered := range r.tools {
+		regLower := strings.ToLower(registered)
+		score := 0
+		if strings.Contains(nameLower, regLower) || strings.Contains(regLower, nameLower) {
+			score = len(regLower)
+		}
+		if score > bestScore {
+			bestScore = score
+			best = registered
+		}
+	}
+	return best
 }
 
 // SetPermissionChecker configures an approval hook for tool execution.
@@ -275,11 +328,16 @@ func (r *Registry) ExecuteCalls(ctx context.Context, sessionID string, calls []T
 		go func(idx int, tc ToolCall) {
 			defer wg.Done()
 			defer func() {
-				if r := recover(); r != nil {
+				if rv := recover(); rv != nil {
+					log.Error().
+						Str("tool", tc.Name).
+						Str("call_id", tc.ID).
+						Str("panic", fmt.Sprintf("%v", rv)).
+						Msg("tool: panicked during execution")
 					results[idx] = ToolCallResult{
 						ToolCallID: tc.ID,
 						ToolName:   tc.Name,
-						Content:    fmt.Sprintf("error: tool panicked: %v", r),
+						Content:    fmt.Sprintf("error: tool panicked: %v", rv),
 						IsError:    true,
 					}
 				}
@@ -287,14 +345,39 @@ func (r *Registry) ExecuteCalls(ctx context.Context, sessionID string, calls []T
 
 			tool := r.Get(tc.Name)
 			if tool == nil {
+				suggestion := r.suggestToolName(tc.Name)
+				msg := "error: unknown tool " + tc.Name
+				if suggestion != "" {
+					msg += fmt.Sprintf("; did you mean %q?", suggestion)
+				}
+				log.Debug().
+					Str("requested", tc.Name).
+					Str("suggestion", suggestion).
+					Str("call_id", tc.ID).
+					Msg("tool: unknown tool requested")
 				results[idx] = ToolCallResult{
 					ToolCallID: tc.ID,
 					ToolName:   tc.Name,
-					Content:    "error: unknown tool " + tc.Name,
+					Content:    msg,
 					IsError:    true,
 				}
 				return
 			}
+
+			resolvedName := tool.Name()
+			if resolvedName != tc.Name {
+				log.Debug().
+					Str("requested", tc.Name).
+					Str("resolved", resolvedName).
+					Str("call_id", tc.ID).
+					Msg("tool: resolved alias")
+			}
+
+			log.Debug().
+				Str("tool", resolvedName).
+				Str("call_id", tc.ID).
+				Str("args", truncateForLog(formatArgs(tc.Arguments), 200)).
+				Msg("tool: executing")
 
 			if checker != nil {
 				approved, err := checker(ctx, PermissionRequest{
@@ -303,6 +386,11 @@ func (r *Registry) ExecuteCalls(ctx context.Context, sessionID string, calls []T
 					Arguments: tc.Arguments,
 				})
 				if err != nil {
+					log.Debug().
+						Str("tool", resolvedName).
+						Str("call_id", tc.ID).
+						Str("error", err.Error()).
+						Msg("tool: permission check failed")
 					results[idx] = ToolCallResult{
 						ToolCallID: tc.ID,
 						ToolName:   tc.Name,
@@ -312,6 +400,10 @@ func (r *Registry) ExecuteCalls(ctx context.Context, sessionID string, calls []T
 					return
 				}
 				if !approved {
+					log.Debug().
+						Str("tool", resolvedName).
+						Str("call_id", tc.ID).
+						Msg("tool: execution denied by user")
 					results[idx] = ToolCallResult{
 						ToolCallID: tc.ID,
 						ToolName:   tc.Name,
@@ -324,6 +416,11 @@ func (r *Registry) ExecuteCalls(ctx context.Context, sessionID string, calls []T
 
 			inputJSON, err := json.Marshal(tc.Arguments)
 			if err != nil {
+				log.Debug().
+					Str("tool", resolvedName).
+					Str("call_id", tc.ID).
+					Str("error", err.Error()).
+					Msg("tool: failed to marshal arguments")
 				results[idx] = ToolCallResult{
 					ToolCallID: tc.ID,
 					ToolName:   tc.Name,
@@ -347,7 +444,21 @@ func (r *Registry) ExecuteCalls(ctx context.Context, sessionID string, calls []T
 				Registry:      r,
 				SendMessageFn: r.SendMessageFn,
 			}
+			start := time.Now()
 			result := tool.Execute(ctx, callCtx, inputJSON)
+			elapsed := time.Since(start)
+
+			status := "success"
+			if result.IsError {
+				status = "failed"
+			}
+			log.Debug().
+				Str("tool", resolvedName).
+				Str("call_id", tc.ID).
+				Str("status", status).
+				Dur("duration", elapsed).
+				Int("result_len", len(result.Output)).
+				Msg("tool: execution complete")
 
 			results[idx] = ToolCallResult{
 				ToolCallID: tc.ID,
@@ -360,4 +471,19 @@ func (r *Registry) ExecuteCalls(ctx context.Context, sessionID string, calls []T
 
 	wg.Wait()
 	return results
+}
+
+func formatArgs(args map[string]any) string {
+	b, err := json.Marshal(args)
+	if err != nil {
+		return "{}"
+	}
+	return string(b)
+}
+
+func truncateForLog(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }

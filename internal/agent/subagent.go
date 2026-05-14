@@ -4,9 +4,12 @@ import (
 	"context"
 	"fmt"
 	"sync/atomic"
+	"time"
 
 	"omnicode/internal/tools"
 )
+
+const defaultSubAgentTimeout = 5 * time.Minute
 
 // SubAgentOptions configures how spawned sub-agents are created.
 type SubAgentOptions struct {
@@ -15,6 +18,7 @@ type SubAgentOptions struct {
 	Backend  string
 	APIShape string
 	MaxTurns int
+	Timeout  time.Duration
 	Checker  tools.PermissionChecker
 	AskUser  func(ctx context.Context, question string, options []string) (string, error)
 }
@@ -51,6 +55,13 @@ func runIsolatedSubAgentTurn(ctx context.Context, opts SubAgentOptions, sessionI
 	if opts.MaxTurns <= 0 {
 		opts.MaxTurns = 10
 	}
+
+	timeout := opts.Timeout
+	if timeout <= 0 {
+		timeout = defaultSubAgentTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 
 	// Isolated registry — no SendMessageFn wired to prevent unbounded recursion.
 	registry := tools.NewRegistry()

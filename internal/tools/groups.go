@@ -65,6 +65,7 @@ func RegisterCoreTools(m *Manager) {
 
 	// 鈹€鈹€ Skill loader 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 	m.Register(LoadSkill(), Metadata{Category: CategoryUtility, ReadOnly: false})
+	m.Register(UnloadSkill(), Metadata{Category: CategoryUtility, ReadOnly: false})
 
 	// 鈹€鈹€ Spec-driven 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 	// Legacy spec_* agent tools (spec_init, spec_write, spec_read, spec_plan,
@@ -104,9 +105,6 @@ const SkillWeb = "web"
 // SkillTask groups background task management tools.
 const SkillTask = "task"
 
-// SkillNotebook groups Jupyter notebook tools.
-const SkillNotebook = "notebook"
-
 // SkillPlan groups plan-mode tools.
 const SkillPlan = "plan"
 
@@ -122,16 +120,14 @@ const SkillAgent = "agent"
 // SkillUtilityExtra groups less-common utility tools (calculator, sleep, lsp, etc).
 const SkillUtilityExtra = "utility_extra"
 
-// SkillConsoleOutputFormatter enables presentation-focused console rendering.
-const SkillConsoleOutputFormatter = "console_output_formatter"
-
 // SkillSpec groups spec-driven development tools.
 const SkillSpec = "spec"
 
 // InitSkillMembership assigns non-core tools in r to their skill group.
 // Must be called after RegisterCoreTools has populated the registry.
 // Core tools (always visible): bash, powershell, read, write, edit, glob,
-// grep, ls, ask_user_question, get_current_time, todo_write, load_skill.
+// grep, ls, ask_user_question, get_current_time, todo_write, load_skill,
+// unload_skill.
 // Everything else requires the user/model to call load_skill first.
 func InitSkillMembership(r *Registry) {
 	// filesystem skill: destructive / bulk write operations

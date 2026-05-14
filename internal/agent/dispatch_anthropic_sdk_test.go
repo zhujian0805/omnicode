@@ -11,6 +11,11 @@ import (
 	"omnicode/internal/tools"
 )
 
+func writeSSE(w http.ResponseWriter, event string, payload string) {
+	_, _ = w.Write([]byte("event: " + event + "\n"))
+	_, _ = w.Write([]byte("data: " + payload + "\n\n"))
+}
+
 // TestAnthropicSDKDispatchConvertsRequest verifies that AnthropicSDKDispatch
 // sends the correct Anthropic Messages API payload and converts the response
 // back to an agent-native messages response.
@@ -144,6 +149,97 @@ func TestAnthropicSDKDispatchToolUseRoundTrip(t *testing.T) {
 	}
 	if tc.Name != "bash" {
 		t.Fatalf("tool name = %q, want bash", tc.Name)
+	}
+}
+
+func TestAnthropicSDKDispatchStreamingToolUseRoundTrip(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		if err := r.ParseForm(); err != nil {
+			http.Error(w, "bad form", http.StatusBadRequest)
+			return
+		}
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			http.Error(w, "flusher unavailable", http.StatusInternalServerError)
+			return
+		}
+
+		writeSSE(w, "message_start", `{"type":"message_start","message":{"id":"msg_stream_1","type":"message","role":"assistant","model":"claude-opus-4-5","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":12,"output_tokens":0}}}`)
+		flusher.Flush()
+		writeSSE(w, "content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_stream_01","name":"bash","input":{}}}`)
+		flusher.Flush()
+		writeSSE(w, "content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"command\":\"echo hi\"}"}}`)
+		flusher.Flush()
+		writeSSE(w, "content_block_stop", `{"type":"content_block_stop","index":0}`)
+		flusher.Flush()
+		writeSSE(w, "message_delta", `{"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null},"usage":{"output_tokens":7}}`)
+		flusher.Flush()
+		writeSSE(w, "message_stop", `{"type":"message_stop"}`)
+		flusher.Flush()
+	}))
+	defer srv.Close()
+
+	dispatch := AnthropicSDKDispatch("test-api-key", srv.URL)
+	req := testMessagesRequest("claude-opus-4-5", testUserMessage("Run echo"))
+	req.Stream = true
+	req.Tools = []tools.ToolDefinition{testToolDefinition("bash", stringPtr("Execute shell commands"), map[string]any{"type": "object", "properties": map[string]any{"command": map[string]any{"type": "string"}}})}
+
+	respCh, err := dispatch(context.Background(), req)
+	if err != nil {
+		t.Fatalf("dispatch error: %v", err)
+	}
+
+	var resp *MessagesResponse
+	for r := range respCh {
+		resp = r
+	}
+	if resp == nil {
+		t.Fatal("got nil response")
+	}
+	if resp.ID != "msg_stream_1" {
+		t.Fatalf("id = %q, want msg_stream_1", resp.ID)
+	}
+	if resp.StopReason != StopReasonToolUse {
+		t.Fatalf("stop_reason = %v, want ToolUse", resp.StopReason)
+	}
+	if resp.Usage == nil || resp.Usage.InputTokens != 12 || resp.Usage.OutputTokens != 7 {
+		t.Fatalf("usage = %#v, want input=12 output=7", resp.Usage)
+	}
+	if len(resp.Content) != 1 {
+		t.Fatalf("content blocks = %d, want 1", len(resp.Content))
+	}
+	block := resp.Content[0]
+	if block.Type != "tool_use" {
+		t.Fatalf("content[0] type = %q, want tool_use", block.Type)
+	}
+	if block.ID != "toolu_stream_01" || block.Name != "bash" {
+		t.Fatalf("tool block = %#v", block)
+	}
+	if got, _ := block.Input["command"].(string); got != "echo hi" {
+		t.Fatalf("tool input command = %#v, want echo hi", block.Input["command"])
+	}
+}
+
+func TestAnthropicSDKDispatchErrorIncludesRequestID(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("request-id", "req_test_123")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"type":"error","error":{"type":"invalid_request_error","message":"bad request"}}`))
+	}))
+	defer srv.Close()
+
+	dispatch := AnthropicSDKDispatch("test-api-key", srv.URL)
+	_, err := dispatch(context.Background(), testMessagesRequest("claude-opus-4-5", testUserMessage("Hello")))
+	if err == nil {
+		t.Fatal("expected dispatch error, got nil")
+	}
+	if !strings.Contains(err.Error(), "request_id=req_test_123") {
+		t.Fatalf("error = %q, want request_id", err)
+	}
+	if !strings.Contains(err.Error(), "messages.new") {
+		t.Fatalf("error = %q, want messages.new context", err)
 	}
 }
 

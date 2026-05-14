@@ -107,9 +107,10 @@ func runBashCommandInDocker(ctx context.Context, command string, timeout time.Du
 		"--memory", "512m",
 		"--pids-limit", "100",
 		"--read-only",
-		"--tmpfs", "/tmp:size=100m",
+		"--tmpfs", "/tmp:size=100m,noexec",
 		"--cap-drop", "ALL",
 		"--user", "nobody:nobody",
+		"--security-opt", "no-new-privileges",
 	}
 	network, err := resolveDockerNetwork()
 	if err != nil {
@@ -128,7 +129,7 @@ func runBashCommandInDocker(ctx context.Context, command string, timeout time.Du
 
 	dockerCmd := exec.CommandContext(cmdCtx, "docker", args...)
 	output, err := dockerCmd.CombinedOutput()
-	text := strings.TrimSpace(string(output))
+	text := truncateShellOutput(strings.TrimSpace(string(output)))
 	if err != nil {
 		if text == "" {
 			return Result{Output: "error: docker sandbox execution failed: " + err.Error(), IsError: true}
@@ -156,9 +157,10 @@ func runPowerShellCommandInDocker(ctx context.Context, command string, timeout t
 		"--memory", "512m",
 		"--pids-limit", "100",
 		"--read-only",
-		"--tmpfs", "/tmp:size=100m",
+		"--tmpfs", "/tmp:size=100m,noexec",
 		"--cap-drop", "ALL",
 		"--user", "nobody:nobody",
+		"--security-opt", "no-new-privileges",
 	}
 	network, err := resolveDockerNetwork()
 	if err != nil {
@@ -177,7 +179,7 @@ func runPowerShellCommandInDocker(ctx context.Context, command string, timeout t
 
 	dockerCmd := exec.CommandContext(cmdCtx, "docker", args...)
 	output, err := dockerCmd.CombinedOutput()
-	text := strings.TrimSpace(string(output))
+	text := truncateShellOutput(strings.TrimSpace(string(output)))
 	if err != nil {
 		if text == "" {
 			return Result{Output: "error: docker sandbox execution failed: " + err.Error(), IsError: true}
@@ -289,4 +291,13 @@ func shouldRetryWithBashOnWindows(output string) bool {
 	}
 	return strings.Contains(output, "The token '&&' is not a valid statement separator") ||
 		strings.Contains(output, "The token '||' is not a valid statement separator")
+}
+
+const maxShellOutputBytes = 50_000
+
+func truncateShellOutput(s string) string {
+	if len(s) <= maxShellOutputBytes {
+		return s
+	}
+	return s[len(s)-maxShellOutputBytes:] + "\n[TRUNCATED: showing last 50000 bytes]"
 }
