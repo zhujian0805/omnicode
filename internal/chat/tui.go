@@ -549,8 +549,9 @@ type chatTUIModel struct {
 	streamBuf            string
 	queuedPrompt         string
 	picker               *modelPickerState
-	slashPicker          *slashPickerState
-	sessionPicker        *sessionPickerState
+	slashPicker           *slashPickerState
+	slashPickerSuppressed bool
+	sessionPicker         *sessionPickerState
 	pendingPermission    *pendingPermissionState
 	agentTurnCancel      context.CancelFunc
 	normalPlaceholder    string
@@ -1348,7 +1349,7 @@ func (m *chatTUIModel) extraTextareaRows() int {
 }
 
 func (m *chatTUIModel) updateSlashPicker() {
-	if m.streamActive || m.pendingPermission != nil || m.historySearchMode {
+	if m.streamActive || m.pendingPermission != nil || m.historySearchMode || m.slashPickerSuppressed {
 		m.slashPicker = nil
 		return
 	}
@@ -2666,9 +2667,16 @@ func (m *chatTUIModel) applyTextareaValue(text string) {
 	m.textarea.CursorEnd()
 }
 
+func (m *chatTUIModel) applyHistoryTextareaValue(text string) {
+	m.applyTextareaValue(text)
+	m.slashPickerSuppressed = true
+	m.slashPicker = nil
+}
+
 func (m *chatTUIModel) resetHistoryNavigation() {
 	m.historyIndex = -1
 	m.historyDraft = ""
+	m.slashPickerSuppressed = false
 }
 
 func (m *chatTUIModel) exitHistorySearch() {
@@ -2721,15 +2729,15 @@ func (m *chatTUIModel) cyclePromptHistory(direction int) {
 	}
 	if m.historyIndex < 0 {
 		m.historyIndex = -1
-		m.applyTextareaValue(m.historyDraft)
+		m.applyHistoryTextareaValue(m.historyDraft)
 		return
 	}
 	if m.historyIndex >= len(m.promptHistory) {
 		m.historyIndex = -1
-		m.applyTextareaValue(m.historyDraft)
+		m.applyHistoryTextareaValue(m.historyDraft)
 		return
 	}
-	m.applyTextareaValue(m.promptHistory[m.historyIndex])
+	m.applyHistoryTextareaValue(m.promptHistory[m.historyIndex])
 }
 
 func (m *chatTUIModel) historySearchStatus() string {

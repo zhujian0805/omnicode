@@ -102,6 +102,43 @@ func TestSlashPickerDownArrowMovesSelection(t *testing.T) {
 	}
 }
 
+func TestHistoryNavigationContinuesPastSlashCommandEntries(t *testing.T) {
+	m := newTestTUIModel()
+	m.recordPromptHistory("first prompt")
+	m.recordPromptHistory("/help")
+	m.recordPromptHistory("latest prompt")
+
+	out, _ := m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	m = out.(chatTUIModel)
+	if got := m.textarea.Value(); got != "latest prompt" {
+		t.Fatalf("first up should load latest prompt, got %q", got)
+	}
+
+	out, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	m = out.(chatTUIModel)
+	if got := m.textarea.Value(); got != "/help" {
+		t.Fatalf("second up should load slash command history entry, got %q", got)
+	}
+
+	out, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	m = out.(chatTUIModel)
+	if got := m.textarea.Value(); got != "first prompt" {
+		t.Fatalf("third up should continue past slash command entry, got %q", got)
+	}
+
+	out, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = out.(chatTUIModel)
+	if got := m.textarea.Value(); got != "/help" {
+		t.Fatalf("down should navigate back to slash command entry, got %q", got)
+	}
+
+	out, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = out.(chatTUIModel)
+	if got := m.textarea.Value(); got != "latest prompt" {
+		t.Fatalf("down should continue past slash command entry, got %q", got)
+	}
+}
+
 func TestSlashPickerEscapeClosesKeepsText(t *testing.T) {
 	m := newTestTUIModel()
 	m = typeRune(t, m, '/')
