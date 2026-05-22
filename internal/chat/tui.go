@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"regexp"
 	"sort"
@@ -585,6 +586,9 @@ type chatTUIModel struct {
 	middleDragging        bool
 	middleDragStartY      int
 	middleDragStartOffset int
+	scrollbarDragging     bool
+	scrollbarDragStartY   int
+	scrollbarDragStartPos int
 }
 
 func newChatTUIModel(c Client, sessionID, model, mode, apiShape, agentBackend string, history []Message, onConfigSave func(model, mode, apiShape, agentBackend, specMode string, autopilot bool, maxTurns int)) chatTUIModel {
@@ -1237,7 +1241,9 @@ func (m chatTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var vpCmd, taCmd tea.Cmd
 	prevYOffset := m.viewport.YOffset
 	prevAtBottom := m.viewport.AtBottom()
-	m.viewport, vpCmd = m.viewport.Update(msg)
+	if !m.textareaHandlesKey(msg) {
+		m.viewport, vpCmd = m.viewport.Update(msg)
+	}
 	if _, isMouse := msg.(tea.MouseMsg); !isMouse {
 		m.textarea, taCmd = m.textarea.Update(msg)
 	}
@@ -1278,6 +1284,19 @@ func (m chatTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	cmds = append(cmds, vpCmd, taCmd)
 	return m, tea.Batch(cmds...)
+}
+
+func (m *chatTUIModel) textareaHandlesKey(msg tea.Msg) bool {
+	keyMsg, ok := msg.(tea.KeyMsg)
+	if !ok || !m.textarea.Focused() || m.streamActive {
+		return false
+	}
+	switch keyMsg.Type {
+	case tea.KeyUp, tea.KeyDown, tea.KeyCtrlP, tea.KeyCtrlN:
+		return true
+	default:
+		return false
+	}
 }
 
 // viewportHeight returns the transcript viewport height for the current layout.
@@ -1365,7 +1384,7 @@ func (m chatTUIModel) View() string {
 	main.WriteString("\n")
 	main.WriteString(div)
 	main.WriteString("\n")
-	main.WriteString(m.viewport.View())
+	main.WriteString(m.renderViewportWithScrollbar())
 	main.WriteString("\n")
 	if overlay := m.renderSlashPicker(); overlay != "" {
 		main.WriteString(overlay)
@@ -1403,6 +1422,121 @@ func (m chatTUIModel) titleText() string {
 		title += "  │  " + m.specMode
 	}
 	return title
+}
+
+func (m chatTUIModel) renderViewportWithScrollbar() string {
+	content := strings.Split(m.viewport.View(), "\n")
+	height := max(m.viewport.Height, len(content))
+	if len(content) < height {
+		padding := make([]string, height-len(content))
+		content = append(content, padding...)
+	}
+
+	trackHeight := max(1, height)
+	thumbTop, thumbHeight := m.scrollbarThumb(trackHeight)
+	trackStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#4B5563"))
+	thumbStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#C4B5FD"))
+	if m.scrollbarDragging {
+		thumbStyle = thumbStyle.Foreground(lipgloss.Color("#E9D5FF")).Bold(true)
+	}
+
+	rows := make([]string, 0, height)
+	contentWidth := max(0, m.viewport.Width-1)
+	for i := 0; i < height; i++ {
+		glyph := "│"
+		style := trackStyle
+		if i >= thumbTop && i < thumbTop+thumbHeight {
+			glyph = "█"
+			style = thumbStyle
+		}
+		line := xansi.Cut(content[i], 0, contentWidth)
+		rows = append(rows, lipgloss.JoinHorizontal(lipgloss.Top, line, style.Render(glyph)))
+	}
+	return strings.Join(rows, "\n")
+}
+
+func (m chatTUIModel) shouldShowScrollbar() bool {
+	return m.viewport.Height > 0 && m.mainWidth > 4
+}
+
+func (m chatTUIModel) scrollbarBounds() (x, top, bottom int, ok bool) {
+	if !m.shouldShowScrollbar() {
+		return 0, 0, 0, false
+	}
+	_, top, right, bottom := m.viewportBounds()
+	return right - 1, top, bottom, true
+}
+
+func (m chatTUIModel) scrollbarThumb(trackHeight int) (top, height int) {
+	total := max(1, m.viewport.TotalLineCount())
+	visible := max(1, m.viewport.Height)
+	if trackHeight <= 0 {
+		return 0, 0
+	}
+	if total <= visible {
+		return 0, trackHeight
+	}
+	maxOffset := max(1, total-visible)
+	height = max(1, (visible*trackHeight)/total)
+	if height > trackHeight {
+		height = trackHeight
+	}
+	travel := max(0, trackHeight-height)
+	if travel == 0 {
+		return 0, height
+	}
+	top = (m.viewport.YOffset * travel) / maxOffset
+	if top < 0 {
+		top = 0
+	}
+	if top > travel {
+		top = travel
+	}
+	return top, height
+}
+
+func (m *chatTUIModel) setViewportOffsetClamped(offset int) {
+	maxOffset := max(0, m.viewport.TotalLineCount()-m.viewport.Height)
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > maxOffset {
+		offset = maxOffset
+	}
+	m.viewport.SetYOffset(offset)
+}
+
+func (m *chatTUIModel) scrollbarOffsetForPointer(y int) int {
+	_, top, _, ok := m.scrollbarBounds()
+	if !ok {
+		return m.viewport.YOffset
+	}
+	trackHeight := max(1, m.viewport.Height)
+	_, thumbHeight := m.scrollbarThumb(trackHeight)
+	pointer := y - top
+	if pointer < 0 {
+		pointer = 0
+	}
+	if pointer >= trackHeight {
+		pointer = trackHeight - 1
+	}
+	thumbCenterOffset := m.scrollbarDragStartPos
+	if thumbCenterOffset < 0 || thumbCenterOffset >= max(1, thumbHeight) {
+		thumbCenterOffset = thumbHeight / 2
+	}
+	targetTop := pointer - thumbCenterOffset
+	travel := max(0, trackHeight-thumbHeight)
+	if targetTop < 0 {
+		targetTop = 0
+	}
+	if targetTop > travel {
+		targetTop = travel
+	}
+	maxOffset := max(0, m.viewport.TotalLineCount()-m.viewport.Height)
+	if travel == 0 || maxOffset == 0 {
+		return 0
+	}
+	return int(math.Round((float64(targetTop) / float64(travel)) * float64(maxOffset)))
 }
 
 func (m chatTUIModel) renderTextarea() string {
@@ -2293,6 +2427,11 @@ func (m *chatTUIModel) handleMouseEvent(msg tea.MouseMsg) bool {
 		return false
 	}
 
+	if m.scrollbarDragging && msg.Action == tea.MouseActionRelease {
+		m.scrollbarDragging = false
+		m.updateAutoFollowFromViewport()
+		return true
+	}
 	if m.middleDragging && msg.Action == tea.MouseActionRelease {
 		m.middleDragging = false
 		m.updateAutoFollowFromViewport()
@@ -2300,6 +2439,16 @@ func (m *chatTUIModel) handleMouseEvent(msg tea.MouseMsg) bool {
 	}
 	if m.selection.selecting && msg.Action == tea.MouseActionRelease {
 		m.finishTranscriptSelection(msg)
+		return true
+	}
+
+	if m.scrollbarDragging {
+		if msg.Action == tea.MouseActionMotion {
+			m.setViewportOffsetClamped(m.scrollbarOffsetForPointer(msg.Y))
+			m.setAutoFollow(false)
+			m.updateAutoFollowFromViewport()
+			return true
+		}
 		return true
 	}
 
@@ -2334,6 +2483,23 @@ func (m *chatTUIModel) handleMouseEvent(msg tea.MouseMsg) bool {
 			return true
 		}
 		return false
+	}
+
+	if msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress {
+		if trackX, trackTop, trackBottom, ok := m.scrollbarBounds(); ok && msg.X == trackX && msg.Y >= trackTop && msg.Y < trackBottom {
+			thumbTop, thumbHeight := m.scrollbarThumb(max(1, m.viewport.Height))
+			localY := msg.Y - trackTop
+			m.scrollbarDragging = true
+			m.scrollbarDragStartY = msg.Y
+			m.scrollbarDragStartPos = thumbHeight / 2
+			if localY >= thumbTop && localY < thumbTop+thumbHeight {
+				m.scrollbarDragStartPos = localY - thumbTop
+			}
+			m.setViewportOffsetClamped(m.scrollbarOffsetForPointer(msg.Y))
+			m.setAutoFollow(false)
+			m.updateAutoFollowFromViewport()
+			return true
+		}
 	}
 
 	if !insideViewport {

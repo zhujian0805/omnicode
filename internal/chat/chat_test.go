@@ -676,6 +676,58 @@ func (s *stubClipboard) WriteAll(text string) error {
 	return s.err
 }
 
+func TestTUIScrollbarRendersForOverflowingViewport(t *testing.T) {
+	m := newChatTUIModel(nil, "session-1", "claude-haiku-4.5", "chat", DefaultAPIShape, "", nil, nil)
+	m.ready = true
+	m.mainWidth = 80
+	m.viewport = viewport.New(80, 4)
+	m.viewport.SetContent(strings.Join([]string{"0", "1", "2", "3", "4", "5", "6", "7", "8", "9"}, "\n"))
+
+	view := m.renderViewportWithScrollbar()
+	if !strings.Contains(view, "█") {
+		t.Fatalf("expected rendered viewport to include scrollbar thumb, got %q", view)
+	}
+	for i, line := range strings.Split(view, "\n") {
+		if got := xansi.StringWidth(line); got != m.viewport.Width {
+			t.Fatalf("line %d width = %d, want viewport width %d", i, got, m.viewport.Width)
+		}
+	}
+}
+
+func TestTUILeftMouseDragScrollbarScrollsViewport(t *testing.T) {
+	m := newChatTUIModel(nil, "session-1", "claude-haiku-4.5", "chat", DefaultAPIShape, "", nil, nil)
+	m.ready = true
+	m.mainWidth = 80
+	m.autoFollow = true
+	m.viewport = viewport.New(80, 4)
+	m.viewport.SetContent(strings.Join([]string{"0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"}, "\n"))
+	trackX, trackTop, _, ok := m.scrollbarBounds()
+	if !ok {
+		t.Fatal("expected scrollbar bounds to be available")
+	}
+
+	model, _ := m.Update(tea.MouseMsg{X: trackX, Y: trackTop, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+	updated := model.(chatTUIModel)
+	if !updated.scrollbarDragging {
+		t.Fatal("expected scrollbar dragging to start")
+	}
+	if updated.autoFollow {
+		t.Fatal("expected autoFollow to be disabled on scrollbar drag start")
+	}
+
+	model, _ = updated.Update(tea.MouseMsg{X: trackX, Y: trackTop + 3, Action: tea.MouseActionMotion, Button: tea.MouseButtonLeft})
+	updated = model.(chatTUIModel)
+	if updated.viewport.YOffset == 0 {
+		t.Fatal("expected viewport offset to change while dragging scrollbar")
+	}
+
+	model, _ = updated.Update(tea.MouseMsg{X: trackX, Y: trackTop + 3, Action: tea.MouseActionRelease, Button: tea.MouseButtonNone})
+	updated = model.(chatTUIModel)
+	if updated.scrollbarDragging {
+		t.Fatal("expected scrollbar dragging to stop on release")
+	}
+}
+
 func TestTUIMiddleMouseDragScrollsViewport(t *testing.T) {
 	m := newChatTUIModel(nil, "session-1", "claude-haiku-4.5", "chat", DefaultAPIShape, "", nil, nil)
 	m.ready = true
@@ -1457,6 +1509,8 @@ func TestTUIUpDownStillNavigatePromptHistory(t *testing.T) {
 	m.ready = true
 	m.mainWidth = 80
 	m.viewport = viewport.New(80, 6)
+	m.viewport.SetContent(strings.Join([]string{"0", "1", "2", "3", "4", "5", "6", "7", "8", "9"}, "\n"))
+	m.viewport.SetYOffset(2)
 	m.promptHistory = []string{"first prompt", "second prompt"}
 	m.textarea.Focus()
 	m.textarea.SetValue("draft")
@@ -1470,14 +1524,17 @@ func TestTUIUpDownStillNavigatePromptHistory(t *testing.T) {
 	if updated.historyDraft != "draft" {
 		t.Fatalf("historyDraft = %q", updated.historyDraft)
 	}
-	if updated.autoFollow {
-		t.Fatal("expected autoFollow to be disabled after manual upward navigation")
+	if updated.viewport.YOffset != 2 {
+		t.Fatalf("viewport offset after KeyUp = %d, want 2", updated.viewport.YOffset)
 	}
 
 	model, _ = updated.Update(tea.KeyMsg{Type: tea.KeyDown})
 	updated = model.(chatTUIModel)
 	if got := updated.textarea.Value(); got != "draft" {
 		t.Fatalf("textarea after KeyDown = %q", got)
+	}
+	if updated.viewport.YOffset != 2 {
+		t.Fatalf("viewport offset after KeyDown = %d, want 2", updated.viewport.YOffset)
 	}
 }
 
